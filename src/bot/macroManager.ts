@@ -61,6 +61,7 @@ export interface StartStateStats {
   macroName: string;
   isRunning: boolean;
   resumeAfterUpdate: boolean;
+  autoFixacEnabled?: boolean;
   currentStep: number;
   cycleCount: number;
   totalStepsExecuted: number;
@@ -182,6 +183,7 @@ export class MacroManager {
       macroName: 'start',
       isRunning: false,
       resumeAfterUpdate: false,
+      autoFixacEnabled: false,
       currentStep: 1,
       cycleCount: 0,
       totalStepsExecuted: 0,
@@ -313,7 +315,7 @@ export class MacroManager {
 
     const ctx: CommandContext = {
       commandName: startMacro.name,
-      args: [],
+      args: state.autoFixacEnabled ? ['fixac'] : [],
       author: { id: 'system', tag: 'auto-resume', username: 'auto-resume' },
       channelId: '1553844985776836638',
       reply: async (msg: string) => {
@@ -591,17 +593,20 @@ export class MacroManager {
       }
     };
 
+    const autoFixacEnabled =
+      isStartMacro && Array.isArray(ctx.args) && ctx.args.some((a) => a.toLowerCase() === 'fixac');
+
     if (isLoopMacro) {
       await updateProgress(
         isStartMacro
           ? options?.resumeStep && options.resumeStep > 1
-            ? `${macro.name}: resumed from step ${options.resumeStep} (cycle #${loopCount})`
-            : `${macro.name}: loop started (send \`stop\` to stop before step 1, 7, 13, or 19)`
+            ? `${macro.name}${autoFixacEnabled ? ' (auto-fixac)' : ''}: resumed from step ${options.resumeStep} (cycle #${loopCount})`
+            : `${macro.name}${autoFixacEnabled ? ' (auto-fixac every 5–6m)' : ''}: loop started (send \`stop\` to stop before step 1, 7, 13, or 19)`
           : `${macro.name}: loop started (send \`stop\` to stop before step 1)`
       );
     }
 
-    // Random interval between 5 and 6 minutes (300,000ms to 360,000ms) for auto-running fixac during start
+    // Random interval between 5 and 6 minutes (300,000ms to 360,000ms) for auto-running fixac during `start fixac`
     const getNextFixacDelayMs = () => (300 + Math.floor(Math.random() * 61)) * 1000;
     let nextFixacAt =
       Date.now() +
@@ -619,6 +624,7 @@ export class MacroManager {
         macroName: macro.name,
         isRunning: true,
         resumeAfterUpdate: false,
+        autoFixacEnabled,
         currentStep: initialIndex + 1,
         cycleCount: loopCount,
         totalStepsExecuted,
@@ -633,11 +639,12 @@ export class MacroManager {
         i === 0 ||
         (isStartMacro && (stepNumber === 1 || stepNumber === 7 || stepNumber === 13 || stepNumber === 19));
 
-      // Check for stop or 10-11m fixac interval right before Step 1, Step 7, or Step 13 (process boundaries)
+      // Check for stop or 5-6m fixac interval right before Step 1, Step 7, Step 13, or Step 19 (process boundaries)
       if (isStopBoundary) {
         if (isStartMacro) {
           this.saveStartState({
             isRunning: true,
+            autoFixacEnabled,
             currentStep: stepNumber,
             cycleCount: loopCount,
             totalStepsExecuted,
@@ -655,6 +662,7 @@ export class MacroManager {
             this.saveStartState({
               isRunning: false,
               resumeAfterUpdate: pausedForUpdate,
+              autoFixacEnabled,
               currentStep: stepNumber,
               cycleCount: loopCount,
               totalStepsExecuted,
@@ -670,8 +678,8 @@ export class MacroManager {
           return { success: true, message: stoppedMsg, steps: stepsLog };
         }
 
-        // Run `fixac` if manually requested during `start`, or every 5-6 minutes automatically (silently)
-        if (isStartMacro && (this.manualFixacPending || Date.now() >= nextFixacAt)) {
+        // Run `fixac` if manually requested during `start`, or every 5-6 minutes automatically ONLY if started via `start fixac`
+        if (isStartMacro && (this.manualFixacPending || (autoFixacEnabled && Date.now() >= nextFixacAt))) {
           const manualReq = this.manualFixacPending;
           this.manualFixacPending = null;
           const isManual = Boolean(manualReq);
