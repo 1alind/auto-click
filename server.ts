@@ -297,6 +297,29 @@ async function startServer() {
     }
   });
 
+  app.get('/api/live/raw-frame', async (req, res) => {
+    if (!LiveController.isActive()) {
+      return res.status(403).json({ success: false, message: 'Live Control is OFF. Send "live" in Discord to activate port 4444.' });
+    }
+    try {
+      const forceFresh = req.query.fresh === '1';
+      const frame = await LiveController.captureLiveFrame(forceFresh);
+      const qMode = LiveController.getStreamQualityMode(req);
+      const rawData = LiveController.getOrCreateRawRgbaGzip(frame, qMode);
+
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Encoding', 'gzip');
+      res.setHeader('X-Screen-Width', String(frame.width));
+      res.setHeader('X-Screen-Height', String(frame.height));
+      res.setHeader('X-Raw-Width', String(rawData.w));
+      res.setHeader('X-Raw-Height', String(rawData.h));
+      res.send(rawData.gzipBuf);
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
   app.get('/api/live/frame', async (req, res) => {
     if (!LiveController.isActive()) {
       return res.status(403).json({ success: false, message: 'Live Control is OFF. Send "live" in Discord to activate port 4444.' });

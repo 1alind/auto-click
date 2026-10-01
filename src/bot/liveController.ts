@@ -4,6 +4,7 @@ import express, { Express, Request } from 'express';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 import { Jimp } from 'jimp';
 import { MacroManager } from './macroManager';
 import { TemplateMatcher } from './matcher';
@@ -23,6 +24,8 @@ export interface LiveTunnelStatus {
 
 interface CachedFrame {
   rawScreen: { data: Buffer; width: number; height: number };
+  rawRgbaLowGzip: { gzipBuf: Buffer; w: number; h: number } | null;
+  rawRgbaMedGzip: { gzipBuf: Buffer; w: number; h: number } | null;
   fastJpegLow: Buffer | null;
   fastJpegMed: Buffer | null;
   fullPng: Buffer | null;
@@ -133,7 +136,7 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
       align-items: center;
       justify-content: center;
     }
-    .viewport img {
+    .viewport img, .viewport canvas {
       max-height: 74dvh;
       max-width: 94vw;
       width: auto;
@@ -235,7 +238,7 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
     </div>
 
     <div id="viewport" class="viewport">
-      <img id="screenImg" alt="Live Screen" />
+      <canvas id="screenCanvas" width="540" height="1200"></canvas>
       <div id="tapMarker" class="tap-marker"></div>
       <div id="boxOverlay" class="box-overlay"></div>
     </div>
@@ -258,7 +261,8 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
     let inFlight = false;
     let dragStart = null, dragCur = null, selectedBox = null;
 
-    const img = document.getElementById('screenImg');
+    const canvas = document.getElementById('screenCanvas');
+    const ctx = canvas.getContext('2d');
     const viewport = document.getElementById('viewport');
     const coordText = document.getElementById('coordText');
     const tapMarker = document.getElementById('tapMarker');
@@ -293,23 +297,29 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
       if (inFlight) return;
       inFlight = true;
       try {
-        const res = await fetch('/api/live/frame?fresh=' + (fresh ? '1' : '0') + '&q=' + quality + '&t=' + Date.now());
+        const res = await fetch('/api/live/raw-frame?fresh=' + (fresh ? '1' : '0') + '&q=' + quality + '&t=' + Date.now());
         if (!res.ok) return;
         const w = Number(res.headers.get('X-Screen-Width'));
         const h = Number(res.headers.get('X-Screen-Height'));
+        const rawW = Number(res.headers.get('X-Raw-Width')) || w;
+        const rawH = Number(res.headers.get('X-Raw-Height')) || h;
         if (w > 0 && h > 0) { screenW = w; screenH = h; }
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const old = img.src;
-        img.src = url;
-        if (old && old.startsWith('blob:')) URL.revokeObjectURL(old);
+        const ab = await res.arrayBuffer();
+        if (ab.byteLength === rawW * rawH * 4) {
+          if (canvas.width !== rawW || canvas.height !== rawH) {
+            canvas.width = rawW;
+            canvas.height = rawH;
+          }
+          const imgData = new ImageData(new Uint8ClampedArray(ab), rawW, rawH);
+          ctx.putImageData(imgData, 0, 0);
+        }
       } catch {} finally {
         inFlight = false;
       }
     }
 
     function toPhone(clientX, clientY) {
-      const rect = img.getBoundingClientRect();
+      const rect = canvas.getBoundingClientRect();
       if (!rect.width || !rect.height) return null;
       const rx = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
       const ry = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
@@ -551,6 +561,54 @@ export class LiveController {
     return pngBuf;
   }
 
+  /**
+   * Subsamples the raw RGBA buffer in RAM (~1ms) and compresses with native C++ zlib level 1 (~2ms)
+   * with ZERO PNG/JPEG encoding on the phone! The browser gunzips natively and renders via <canvas> putImageData().
+   */
+  public static getOrCreateRawRgbaGzip(
+    frame: CachedFrame,
+    mode: 'low' | 'med' | 'hd' = 'med'
+  ): { gzipBuf: Buffer; w: number; h: number } {
+    if (mode === 'low' && frame.rawRgbaLowGzip) return frame.rawRgbaLowGzip;
+    if (mode !== 'low' && frame.rawRgbaMedGzip) return frame.rawRgbaMedGzip;
+
+    const srcW = frame.width;
+    const srcH = frame.height;
+    const step = mode === 'low' ? 3 : mode === 'hd' ? 1 : 2;
+    const dstW = Math.max(1, Math.floor(srcW / step));
+    const dstH = Math.max(1, Math.floor(srcH / step));
+
+    const srcData = frame.rawScreen.data;
+    let rawOut: Buffer;
+
+    if (step === 1) {
+      rawOut = srcData;
+    } else {
+      rawOut = Buffer.allocUnsafe(dstW * dstH * 4);
+      let dstIdx = 0;
+      for (let y = 0; y < dstH; y++) {
+        const srcRowOffset = y * step * srcW;
+        for (let x = 0; x < dstW; x++) {
+          const srcIdx = (srcRowOffset + x * step) * 4;
+          rawOut[dstIdx] = srcData[srcIdx];
+          rawOut[dstIdx + 1] = srcData[srcIdx + 1];
+          rawOut[dstIdx + 2] = srcData[srcIdx + 2];
+          rawOut[dstIdx + 3] = 255;
+          dstIdx += 4;
+        }
+      }
+    }
+
+    const gzipBuf = zlib.gzipSync(rawOut, { level: 1 });
+    const result = { gzipBuf, w: dstW, h: dstH };
+    if (mode === 'low') {
+      frame.rawRgbaLowGzip = result;
+    } else if (mode === 'med') {
+      frame.rawRgbaMedGzip = result;
+    }
+    return result;
+  }
+
   private static getOrCreateExpressApp(): Express {
     if (this.requestHandler) return this.requestHandler;
 
@@ -580,6 +638,26 @@ export class LiveController {
     app.post('/api/live/stop', async (_req, res) => {
       const status = await this.stopLiveTunnel();
       res.json({ success: true, tunnel: status });
+    });
+
+    app.get('/api/live/raw-frame', async (req, res) => {
+      try {
+        const forceFresh = req.query.fresh === '1';
+        const frame = await this.captureLiveFrame(forceFresh);
+        const qMode = this.getStreamQualityMode(req);
+        const rawData = this.getOrCreateRawRgbaGzip(frame, qMode);
+
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('X-Screen-Width', String(frame.width));
+        res.setHeader('X-Screen-Height', String(frame.height));
+        res.setHeader('X-Raw-Width', String(rawData.w));
+        res.setHeader('X-Raw-Height', String(rawData.h));
+        res.send(rawData.gzipBuf);
+      } catch (err: any) {
+        res.status(500).json({ success: false, message: err.message });
+      }
     });
 
     app.get('/api/live/frame', async (req, res) => {
@@ -996,6 +1074,8 @@ export class LiveController {
 
         const frame: CachedFrame = {
           rawScreen,
+          rawRgbaLowGzip: null,
+          rawRgbaMedGzip: null,
           fastJpegLow: null,
           fastJpegMed: null,
           fullPng: null,

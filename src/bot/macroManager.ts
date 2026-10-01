@@ -899,16 +899,38 @@ export class MacroManager {
                 }
               } else if (isStartMacro) {
                 // One-by-one button recovery for `start`:
-                // Check which button is currently on screen, click the first one found, and continue from its step!
+                // Check which button is currently on screen (including Step 1's 100×100 RAM image ONLY when other buttons aren't found),
+                // click the first one found, and continue from its step!
                 const roundIndex = Math.min(3, Math.floor(i / 6)); // 0: steps 1-6, 1: steps 7-12, 2: steps 13-18, 3: steps 19-24
                 const roundBaseStepIdx = roundIndex * 6; // 0, 6, 12, or 18 (Step 1, 7, 13, or 19)
                 const roundAsBtnStepIdx = roundBaseStepIdx + 2; // 2, 8, 14, or 20 (Step 3, 9, 15, or 21)
                 const roundAsNumStepIdx = roundBaseStepIdx + 4; // 4, 10, 16, or 22 (Step 5, 11, 17, or 23)
 
-                const candidateStepIndices = [
-                  roundAsNumStepIdx,
-                  roundAsBtnStepIdx,
-                  roundBaseStepIdx
+                const candidates: Array<{
+                  stepIdx: number;
+                  refName: string;
+                  region: { minX: number; maxX: number; minY: number; maxY: number };
+                }> = [
+                  {
+                    stepIdx: roundAsNumStepIdx,
+                    refName: macro.steps[roundAsNumStepIdx]?.refPath || `as${roundIndex + 1}.png`,
+                    region: {
+                      minX: macro.steps[roundAsNumStepIdx]?.minX ?? 445,
+                      maxX: macro.steps[roundAsNumStepIdx]?.maxX ?? 833,
+                      minY: macro.steps[roundAsNumStepIdx]?.minY ?? 1627,
+                      maxY: macro.steps[roundAsNumStepIdx]?.maxY ?? 1698
+                    }
+                  },
+                  {
+                    stepIdx: roundAsBtnStepIdx,
+                    refName: 'asbtn.png',
+                    region: { minX: 771, maxX: 840, minY: 1107, maxY: 1176 }
+                  },
+                  {
+                    stepIdx: roundBaseStepIdx,
+                    refName: 'ram://step1.png',
+                    region: { minX: 465, maxX: 602, minY: 1109, maxY: 1223 }
+                  }
                 ];
 
                 ctx.log(
@@ -920,11 +942,8 @@ export class MacroManager {
                 // Try on current screen first, then if none found wait 600ms and re-check once on a fresh screen
                 for (let attempt = 0; attempt < 2 && !recovered; attempt++) {
                   const screenToCheck = attempt === 0 ? rawScreen : await adb.screencapRaw();
-                  for (const candIdx of candidateStepIndices) {
-                    const candStep = macro.steps[candIdx];
-                    if (!candStep || candStep.type !== 'locate_and_tap' || !candStep.refPath) continue;
-
-                    const candName = candStep.refPath;
+                  for (const cand of candidates) {
+                    const candName = cand.refName;
                     const candIsRam = candName.startsWith('ram://');
                     const candPath = candIsRam ? candName : resolveCustomImagePath(candName);
                     const candExists = candIsRam
@@ -932,29 +951,21 @@ export class MacroManager {
                       : Boolean(candPath && fs.existsSync(candPath));
                     if (!candExists || !candPath) continue;
 
-                    const candRegion =
-                      candStep.minX !== undefined &&
-                      candStep.maxX !== undefined &&
-                      candStep.minY !== undefined &&
-                      candStep.maxY !== undefined
-                        ? { minX: candStep.minX, maxX: candStep.maxX, minY: candStep.minY, maxY: candStep.maxY }
-                        : undefined;
-
                     const candMatch = await TemplateMatcher.matchRaw(screenToCheck, candPath, {
                       scales: [0.7, 0.85, 1.0, 1.15, 1.3],
                       threshold: effectiveThreshold,
-                      region: candRegion
+                      region: cand.region
                     });
 
                     if (candMatch.found) {
                       const clickX = candMatch.targetPoint.x;
                       const clickY = candMatch.targetPoint.y;
                       ctx.log(
-                        `🔄 Found "${candName}" (${(candMatch.score * 100).toFixed(1)}%)! Clicking (${clickX}, ${clickY}) and continuing from step ${candIdx + 1}...`,
+                        `🔄 Found "${candName}" (${(candMatch.score * 100).toFixed(1)}%)! Clicking (${clickX}, ${clickY}) and continuing from step ${cand.stepIdx + 1}...`,
                         'info'
                       );
                       await adb.tap(clickX, clickY);
-                      i = candIdx; // Loop will increment `i` to `candIdx + 1` (the wait step right after this button)
+                      i = cand.stepIdx; // Loop will increment `i` to `cand.stepIdx + 1` (the wait step right after this button)
                       recovered = true;
                       break;
                     }
@@ -1182,13 +1193,12 @@ export class MacroManager {
         createdAt: new Date().toISOString(),
         steps: [
           {
-            type: 'locate_and_tap',
-            refPath: 'ram://step1.png',
+            type: 'tap_range',
             minX: 465,
             maxX: 602,
             minY: 1109,
             maxY: 1223,
-            label: 'Match Step 1 RAM ref (100×100) in X=[465..602], Y=[1109..1223] & tap'
+            label: 'Random Tap X=[465..602], Y=[1109..1223]'
           },
           {
             type: 'wait',
@@ -1224,13 +1234,12 @@ export class MacroManager {
             label: 'Wait 600ms'
           },
           {
-            type: 'locate_and_tap',
-            refPath: 'ram://step1.png',
+            type: 'tap_range',
             minX: 465,
             maxX: 602,
             minY: 1109,
             maxY: 1223,
-            label: 'Match Step 1 RAM ref (100×100) in X=[465..602], Y=[1109..1223] & tap'
+            label: 'Random Tap X=[465..602], Y=[1109..1223]'
           },
           {
             type: 'wait',
@@ -1266,13 +1275,12 @@ export class MacroManager {
             label: 'Wait 600ms'
           },
           {
-            type: 'locate_and_tap',
-            refPath: 'ram://step1.png',
+            type: 'tap_range',
             minX: 465,
             maxX: 602,
             minY: 1109,
             maxY: 1223,
-            label: 'Match Step 1 RAM ref (100×100) in X=[465..602], Y=[1109..1223] & tap'
+            label: 'Random Tap X=[465..602], Y=[1109..1223]'
           },
           {
             type: 'wait',
@@ -1308,13 +1316,12 @@ export class MacroManager {
             label: 'Wait 600ms'
           },
           {
-            type: 'locate_and_tap',
-            refPath: 'ram://step1.png',
+            type: 'tap_range',
             minX: 465,
             maxX: 602,
             minY: 1109,
             maxY: 1223,
-            label: 'Match Step 1 RAM ref (100×100) in X=[465..602], Y=[1109..1223] & tap'
+            label: 'Random Tap X=[465..602], Y=[1109..1223]'
           },
           {
             type: 'wait',
@@ -1362,15 +1369,14 @@ export class MacroManager {
       for (let idx = 0; idx < existingStart.steps.length; idx++) {
         const step = existingStart.steps[idx];
         if (idx === 0 || idx === 6 || idx === 12 || idx === 18) {
-          if (step.type !== 'locate_and_tap' || step.refPath !== 'ram://step1.png') {
+          if (step.type !== 'tap_range') {
             existingStart.steps[idx] = {
-              type: 'locate_and_tap',
-              refPath: 'ram://step1.png',
+              type: 'tap_range',
               minX: 465,
               maxX: 602,
               minY: 1109,
               maxY: 1223,
-              label: 'Match Step 1 RAM ref (100×100) in X=[465..602], Y=[1109..1223] & tap'
+              label: 'Random Tap X=[465..602], Y=[1109..1223]'
             };
             updated = true;
           }
