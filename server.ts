@@ -297,6 +297,19 @@ async function startServer() {
     }
   });
 
+  app.get('/api/live/h264-stream', async (req, res) => {
+    if (!LiveController.isActive()) {
+      return res.status(403).json({ success: false, message: 'Live Control is OFF. Send "live" in Discord to activate port 4444.' });
+    }
+    try {
+      await LiveController.streamH264(req, res);
+    } catch (err: any) {
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, message: err.message });
+      }
+    }
+  });
+
   app.get('/api/live/raw-frame', async (req, res) => {
     if (!LiveController.isActive()) {
       return res.status(403).json({ success: false, message: 'Live Control is OFF. Send "live" in Discord to activate port 4444.' });

@@ -136,7 +136,7 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
       align-items: center;
       justify-content: center;
     }
-    .viewport img, .viewport canvas {
+    .viewport img, .viewport canvas, .viewport video {
       max-height: 74dvh;
       max-width: 94vw;
       width: auto;
@@ -208,18 +208,12 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
       <span id="coordText" class="coords">1080×2400</span>
       <div class="row">
         <button id="btnStream" class="btn-green">● Live</button>
-        <select id="selQuality" title="Stream Quality">
-          <option value="auto" selected>Fast HD (540p)</option>
-          <option value="low">Ultra Fast (360p)</option>
-          <option value="hd">Lossless PNG (Slow)</option>
+        <select id="selQuality" title="Stream Mode">
+          <option value="h264" selected>⚡ 60FPS Video (Low 368p)</option>
+          <option value="low">🚀 Ultra-Low Frame (270p 12KB)</option>
+          <option value="auto">🖼️ Medium Frame (540p)</option>
         </select>
-        <select id="selSpeed" title="Refresh Interval">
-          <option value="150" selected>Max FPS</option>
-          <option value="400">0.4s</option>
-          <option value="800">0.8s</option>
-          <option value="1500">1.5s</option>
-        </select>
-        <button id="btnRefresh">↻</button>
+        <button id="btnRefresh" title="Reconnect / Refresh">↻</button>
       </div>
     </div>
 
@@ -238,7 +232,8 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
     </div>
 
     <div id="viewport" class="viewport">
-      <canvas id="screenCanvas" width="540" height="1200"></canvas>
+      <video id="liveVideo" autoplay muted playsinline style="display:none;"></video>
+      <img id="screenImg" alt="Live Screen" />
       <div id="tapMarker" class="tap-marker"></div>
       <div id="boxOverlay" class="box-overlay"></div>
     </div>
@@ -252,17 +247,20 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
 
   <div id="toast" class="toast"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/jmuxer@2.0.5/dist/jmuxer.min.js"></script>
   <script>
     let mode = 'touch';
     let streaming = true;
     let intervalMs = 150;
-    let quality = 'auto';
+    let quality = 'h264';
     let screenW = 1080, screenH = 2400;
     let inFlight = false;
     let dragStart = null, dragCur = null, selectedBox = null;
+    let jmuxer = null;
+    let h264Abort = null;
 
-    const canvas = document.getElementById('screenCanvas');
-    const ctx = canvas.getContext('2d');
+    const videoEl = document.getElementById('liveVideo');
+    const imgEl = document.getElementById('screenImg');
     const viewport = document.getElementById('viewport');
     const coordText = document.getElementById('coordText');
     const tapMarker = document.getElementById('tapMarker');
@@ -293,33 +291,101 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
       } catch {}
     }
 
+    function stopH264Stream() {
+      if (h264Abort) {
+        try { h264Abort.abort(); } catch {}
+        h264Abort = null;
+      }
+      if (jmuxer) {
+        try { jmuxer.destroy(); } catch {}
+        jmuxer = null;
+      }
+      videoEl.style.display = 'none';
+      imgEl.style.display = 'block';
+    }
+
+    async function startH264Stream() {
+      stopH264Stream();
+      const canUseMse = typeof JMuxer !== 'undefined' && (window.MediaSource || window.ManagedMediaSource);
+      if (!streaming || quality !== 'h264') {
+        return;
+      }
+      if (!canUseMse) {
+        // Browser doesn't support MediaSource (e.g. older iOS Safari) -> switch to ultra-low 12KB frame stream
+        quality = 'low';
+        document.getElementById('selQuality').value = 'low';
+        fetchFrame(true);
+        return;
+      }
+
+      try {
+        jmuxer = new JMuxer({
+          node: 'liveVideo',
+          mode: 'video',
+          flushingTime: 0,
+          clearBuffer: true,
+          fps: 60,
+          debug: false
+        });
+
+        videoEl.onloadeddata = () => {
+          if (quality === 'h264' && streaming) {
+            videoEl.style.display = 'block';
+            imgEl.style.display = 'none';
+            videoEl.play().catch(() => {});
+          }
+        };
+
+        h264Abort = new AbortController();
+        const res = await fetch('/api/live/h264-stream?t=' + Date.now(), {
+          signal: h264Abort.signal
+        });
+        if (!res.ok || !res.body) return;
+
+        const reader = res.body.getReader();
+        while (streaming && quality === 'h264') {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value && value.byteLength > 0 && jmuxer) {
+            if (videoEl.style.display === 'none') {
+              videoEl.style.display = 'block';
+              imgEl.style.display = 'none';
+              videoEl.play().catch(() => {});
+            }
+            jmuxer.feed({ video: value });
+          }
+        }
+      } catch (e) {
+        // Reconnect if stream ended
+      }
+      if (streaming && quality === 'h264') {
+        setTimeout(() => { if (streaming && quality === 'h264') startH264Stream(); }, 300);
+      }
+    }
+
     async function fetchFrame(fresh = false) {
       if (inFlight) return;
       inFlight = true;
       try {
-        const res = await fetch('/api/live/raw-frame?fresh=' + (fresh ? '1' : '0') + '&q=' + quality + '&t=' + Date.now());
+        const qParam = quality === 'h264' ? 'low' : quality;
+        const res = await fetch('/api/live/frame?fresh=' + (fresh ? '1' : '0') + '&q=' + qParam + '&t=' + Date.now());
         if (!res.ok) return;
         const w = Number(res.headers.get('X-Screen-Width'));
         const h = Number(res.headers.get('X-Screen-Height'));
-        const rawW = Number(res.headers.get('X-Raw-Width')) || w;
-        const rawH = Number(res.headers.get('X-Raw-Height')) || h;
         if (w > 0 && h > 0) { screenW = w; screenH = h; }
-        const ab = await res.arrayBuffer();
-        if (ab.byteLength === rawW * rawH * 4) {
-          if (canvas.width !== rawW || canvas.height !== rawH) {
-            canvas.width = rawW;
-            canvas.height = rawH;
-          }
-          const imgData = new ImageData(new Uint8ClampedArray(ab), rawW, rawH);
-          ctx.putImageData(imgData, 0, 0);
-        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const old = imgEl.src;
+        imgEl.src = url;
+        if (old && old.startsWith('blob:')) URL.revokeObjectURL(old);
       } catch {} finally {
         inFlight = false;
       }
     }
 
     function toPhone(clientX, clientY) {
-      const rect = canvas.getBoundingClientRect();
+      const activeEl = videoEl.style.display !== 'none' ? videoEl : imgEl;
+      const rect = activeEl.getBoundingClientRect();
       if (!rect.width || !rect.height) return null;
       const rx = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
       const ry = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
@@ -390,7 +456,7 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ x1: sPt.x, y1: sPt.y, x2: endPt.x, y2: endPt.y, durationMs: 300 })
         });
-        setTimeout(() => fetchFrame(true), 300);
+        if (quality !== 'h264') setTimeout(() => fetchFrame(true), 250);
       } else {
         tapMarker.style.display = 'block';
         tapMarker.style.left = ((endPt.x / screenW) * 100) + '%';
@@ -402,7 +468,7 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ x: endPt.x, y: endPt.y })
         });
-        setTimeout(() => fetchFrame(true), 300);
+        if (quality !== 'h264') setTimeout(() => fetchFrame(true), 250);
       }
     });
 
@@ -422,16 +488,22 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
       streaming = !streaming;
       e.target.textContent = streaming ? '● Live' : '○ Pause';
       e.target.className = streaming ? 'btn-green' : '';
+      if (!streaming) stopH264Stream();
+      else if (quality === 'h264') startH264Stream();
     };
     document.getElementById('selQuality').onchange = (e) => {
       quality = e.target.value;
-      fetchFrame(true);
+      if (quality === 'h264') {
+        startH264Stream();
+      } else {
+        stopH264Stream();
+        fetchFrame(true);
+      }
     };
-    document.getElementById('selSpeed').onchange = (e) => {
-      intervalMs = Number(e.target.value);
-      resetTimer();
+    document.getElementById('btnRefresh').onclick = () => {
+      if (quality === 'h264') startH264Stream();
+      else fetchFrame(true);
     };
-    document.getElementById('btnRefresh').onclick = () => fetchFrame(true);
     document.getElementById('btnCopyRange').onclick = () => {
       if (!selectedBox) return;
       const s = selectedBox.minX + '-' + selectedBox.maxX + ' ' + selectedBox.minY + '-' + selectedBox.maxY;
@@ -475,11 +547,16 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
     let loopTimer = null;
     function resetTimer() {
       if (loopTimer) clearInterval(loopTimer);
-      loopTimer = setInterval(() => { if (streaming) fetchFrame(false); }, intervalMs);
+      // NEVER run screencap polling while H.264 video stream is active!
+      loopTimer = setInterval(() => {
+        if (streaming && quality !== 'h264') {
+          fetchFrame(false);
+        }
+      }, intervalMs);
     }
 
     fetchStatus();
-    fetchFrame(true);
+    startH264Stream();
     resetTimer();
     setInterval(fetchStatus, 3000);
   </script>
@@ -496,34 +573,127 @@ export class LiveController {
   private static framePromise: Promise<CachedFrame> | null = null;
   private static lastFrame: CachedFrame | null = null;
   private static requestHandler: Express | null = null;
+  private static activeH264Proc: ChildProcess | null = null;
 
   /**
-   * Returns 'hd' (lossless PNG), 'med' (2x downsampled JPEG, great for Local Wi-Fi), or 'low' (3x downsampled JPEG, great for Internet).
+   * Streams raw H.264 NAL units directly from Android's hardware MediaCodec encoder at ultra-low bitrate:
+   * `adb exec-out screenrecord --output-format=h264 --size 368x800 --bit-rate 500000 -`
+   */
+  public static async streamH264(req: Request, res: express.Response): Promise<void> {
+    if (this.activeH264Proc) {
+      try {
+        this.activeH264Proc.kill('SIGTERM');
+      } catch {}
+      this.activeH264Proc = null;
+    }
+
+    const { botManager } = await import('./botManager');
+    const adb = botManager.getAdbController();
+    const devices = await adb.getDevices();
+    const online =
+      devices.find((d) => d.state === 'device' && d.serial.startsWith('127.0.0.1:')) ||
+      devices.find((d) => d.state === 'device');
+    const baseArgs: string[] = [];
+    if (online?.serial) {
+      baseArgs.push('-s', online.serial);
+    }
+
+    res.setHeader('Content-Type', 'video/h264');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Connection', 'keep-alive');
+
+    let closed = false;
+    let bytesSent = 0;
+
+    const spawnStream = (useCustomSize: boolean) => {
+      if (closed) return;
+      const args = [
+        ...baseArgs,
+        'exec-out',
+        'screenrecord',
+        '--output-format=h264',
+        ...(useCustomSize ? ['--size', '368x800'] : []),
+        '--bit-rate',
+        '500000',
+        '-'
+      ];
+      const proc = spawn('adb', args, { stdio: ['ignore', 'pipe', 'ignore'] });
+      this.activeH264Proc = proc;
+
+      // Nudge SurfaceFlinger once after 180ms so static screens emit an immediate keyframe
+      setTimeout(() => {
+        if (!closed && bytesSent === 0) {
+          spawn('adb', [...baseArgs, 'shell', 'input', 'motionevent', 'CANCEL', '0', '0'], {
+            stdio: 'ignore'
+          });
+        }
+      }, 180);
+
+      proc.stdout?.on('data', (chunk: Buffer) => {
+        bytesSent += chunk.length;
+        if (!res.writableEnded) {
+          res.write(chunk);
+        }
+      });
+
+      proc.on('exit', () => {
+        if (this.activeH264Proc === proc) {
+          this.activeH264Proc = null;
+        }
+        // If custom size 368x800 was rejected by the device (0 bytes sent), fallback to native size @ 500Kbps
+        if (!closed && useCustomSize && bytesSent === 0) {
+          spawnStream(false);
+          return;
+        }
+        if (!res.writableEnded) {
+          res.end();
+        }
+      });
+
+      proc.on('error', () => {
+        if (!res.writableEnded) {
+          res.end();
+        }
+      });
+    };
+
+    spawnStream(true);
+
+    req.on('close', () => {
+      closed = true;
+      if (this.activeH264Proc) {
+        try {
+          this.activeH264Proc.kill('SIGTERM');
+        } catch {}
+        this.activeH264Proc = null;
+      }
+      if (!res.writableEnded) {
+        res.end();
+      }
+    });
+  }
+
+  /**
+   * Returns 'hd' (lossless PNG), 'med' (2x downsampled JPEG), or 'low' (4x downsampled 270x600 ~12KB JPEG).
    */
   public static getStreamQualityMode(req: Request): 'low' | 'med' | 'hd' {
-    const q = String(req.query.q || 'auto').toLowerCase();
+    const q = String(req.query.q || 'low').toLowerCase();
     if (q === 'hd') return 'hd';
-    if (q === 'low' || q === 'fast') return 'low';
-    if (this.currentMode === 'net') return 'low';
-    const host = String(req.headers.host || '').toLowerCase();
-    if (host.includes('trycloudflare.com') || req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for']) {
-      return 'low';
-    }
-    // Default 'auto' on local Wi-Fi uses fast 2x JPEG (~45 KB, 10x faster than 3MB PNG!)
-    return 'med';
+    if (q === 'auto' || q === 'med') return 'med';
+    return 'low';
   }
 
   /**
    * Downsamples the raw RGBA buffer directly in RAM (skipping PNG encode/decode completely!)
-   * and encodes a compact JPEG in ~15ms.
+   * and encodes a tiny ~12KB JPEG (step=4, 270x600, quality=35) in ~4ms.
    */
-  public static async getOrCreateFastJpeg(frame: CachedFrame, mode: 'low' | 'med' = 'med'): Promise<Buffer> {
+  public static async getOrCreateFastJpeg(frame: CachedFrame, mode: 'low' | 'med' = 'low'): Promise<Buffer> {
     if (mode === 'low' && frame.fastJpegLow) return frame.fastJpegLow;
     if (mode === 'med' && frame.fastJpegMed) return frame.fastJpegMed;
 
     const srcW = frame.width;
     const srcH = frame.height;
-    const step = mode === 'low' ? 3 : 2; // 2x = 540x1200 (Local Wi-Fi), 3x = 360x800 (Internet)
+    const step = mode === 'low' ? 4 : 2; // 4x = 270x600 (~12 KB JPEG!), 2x = 540x1200 (~40 KB JPEG)
     const dstW = Math.max(1, Math.floor(srcW / step));
     const dstH = Math.max(1, Math.floor(srcH / step));
 
@@ -544,7 +714,7 @@ export class LiveController {
       }
     }
 
-    const jpegQuality = mode === 'low' ? 50 : 68;
+    const jpegQuality = mode === 'low' ? 35 : 60;
     const jpegBuf = await dst.getBuffer('image/jpeg', { quality: jpegQuality });
     if (mode === 'low') {
       frame.fastJpegLow = jpegBuf;
@@ -638,6 +808,16 @@ export class LiveController {
     app.post('/api/live/stop', async (_req, res) => {
       const status = await this.stopLiveTunnel();
       res.json({ success: true, tunnel: status });
+    });
+
+    app.get('/api/live/h264-stream', async (req, res) => {
+      try {
+        await this.streamH264(req, res);
+      } catch (err: any) {
+        if (!res.headersSent) {
+          res.status(500).json({ success: false, message: err.message });
+        }
+      }
     });
 
     app.get('/api/live/raw-frame', async (req, res) => {
