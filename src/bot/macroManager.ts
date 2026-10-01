@@ -929,7 +929,7 @@ export class MacroManager {
                   {
                     stepIdx: roundBaseStepIdx,
                     refName: 'ram://step1.png',
-                    region: { minX: 465, maxX: 602, minY: 1109, maxY: 1223 }
+                    region: { minX: 430, maxX: 640, minY: 1060, maxY: 1270 }
                   }
                 ];
 
@@ -958,13 +958,21 @@ export class MacroManager {
                     });
 
                     if (candMatch.found) {
-                      const clickX = candMatch.targetPoint.x;
-                      const clickY = candMatch.targetPoint.y;
-                      ctx.log(
-                        `🔄 Found "${candName}" (${(candMatch.score * 100).toFixed(1)}%)! Clicking (${clickX}, ${clickY}) and continuing from step ${cand.stepIdx + 1}...`,
-                        'info'
-                      );
-                      await adb.tap(clickX, clickY);
+                      if (candIsRam) {
+                        const tapRes = await adb.tapRandomRange(465, 602, 1109, 1223);
+                        ctx.log(
+                          `🔄 Found center RAM image (${(candMatch.score * 100).toFixed(1)}%)! Clicked center XY range at (${tapRes.x}, ${tapRes.y}) and continuing from step ${cand.stepIdx + 1}...`,
+                          'info'
+                        );
+                      } else {
+                        const clickX = candMatch.targetPoint.x;
+                        const clickY = candMatch.targetPoint.y;
+                        ctx.log(
+                          `🔄 Found "${candName}" (${(candMatch.score * 100).toFixed(1)}%)! Clicking (${clickX}, ${clickY}) and continuing from step ${cand.stepIdx + 1}...`,
+                          'info'
+                        );
+                        await adb.tap(clickX, clickY);
+                      }
                       i = cand.stepIdx; // Loop will increment `i` to `cand.stepIdx + 1` (the wait step right after this button)
                       recovered = true;
                       break;
