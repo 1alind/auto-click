@@ -178,6 +178,22 @@ export class TemplateMatcher {
   }
 
   /**
+   * Stores an in-memory PNG buffer directly in the template cache under a `ram://` key.
+   */
+  public static async setInMemoryTemplate(key: string, pngBuffer: Buffer): Promise<void> {
+    const loaded = await Jimp.read(pngBuffer);
+    this.multiTemplateCache.set(key, {
+      mtimeMs: Date.now(),
+      jimpImg: loaded,
+      scaledMap: new Map()
+    });
+  }
+
+  public static hasInMemoryTemplate(key: string): boolean {
+    return this.multiTemplateCache.has(key);
+  }
+
+  /**
    * Fast RAM-based template matcher that operates directly on the raw RGBA buffer from `adb exec-out screencap`
    * without any PNG compression/decompression, caches all templates & scaled variants in a Map,
    * subsamples only the target region in a single pass, and checks 1.0x scale first with early exit.
@@ -197,17 +213,25 @@ export class TemplateMatcher {
     // Always test 1.0x scale first for instant early exit
     const scales = [1.0, ...rawScales.filter((s) => Math.abs(s - 1.0) > 0.001)];
 
-    const resolvedPath = path.resolve(process.cwd(), templatePath);
-    if (!fs.existsSync(resolvedPath)) {
-      throw new Error(`Template image not found at path: ${resolvedPath}`);
-    }
-    const stat = fs.statSync(resolvedPath);
-    let cached = this.multiTemplateCache.get(resolvedPath);
-    if (!cached || cached.mtimeMs !== stat.mtimeMs) {
-      const fileBuf = await fs.promises.readFile(resolvedPath);
-      const loaded = await Jimp.read(fileBuf);
-      cached = { mtimeMs: stat.mtimeMs, jimpImg: loaded, scaledMap: new Map() };
-      this.multiTemplateCache.set(resolvedPath, cached);
+    let cached: { mtimeMs: number; jimpImg: any; scaledMap: Map<string, any> } | undefined;
+    if (templatePath.startsWith('ram://')) {
+      cached = this.multiTemplateCache.get(templatePath);
+      if (!cached) {
+        throw new Error(`In-memory RAM template not initialized: ${templatePath}`);
+      }
+    } else {
+      const resolvedPath = path.resolve(process.cwd(), templatePath);
+      if (!fs.existsSync(resolvedPath)) {
+        throw new Error(`Template image not found at path: ${resolvedPath}`);
+      }
+      const stat = fs.statSync(resolvedPath);
+      cached = this.multiTemplateCache.get(resolvedPath);
+      if (!cached || cached.mtimeMs !== stat.mtimeMs) {
+        const fileBuf = await fs.promises.readFile(resolvedPath);
+        const loaded = await Jimp.read(fileBuf);
+        cached = { mtimeMs: stat.mtimeMs, jimpImg: loaded, scaledMap: new Map() };
+        this.multiTemplateCache.set(resolvedPath, cached);
+      }
     }
 
     const screenWidth = rawScreen.width;

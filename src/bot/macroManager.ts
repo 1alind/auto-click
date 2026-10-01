@@ -619,7 +619,25 @@ export class MacroManager {
         ? options.resumeStep - 1
         : 0;
 
+    // Helper to capture and store a 100x100 px reference crop of Step 1's center (X:483..583, Y:1116..1216) in RAM
+    const captureStep1RefInRam = async () => {
+      try {
+        const initScreen = await adb.screencapRaw();
+        const crop100x100 = await TemplateMatcher.cropRawToPng(initScreen, {
+          minX: 483,
+          maxX: 583,
+          minY: 1116,
+          maxY: 1216
+        });
+        await TemplateMatcher.setInMemoryTemplate('ram://step1.png', crop100x100);
+        ctx.log('📸 Saved 100×100 px Step 1 reference image in RAM (X:483..583, Y:1116..1216)', 'info');
+      } catch (err: any) {
+        ctx.log(`⚠️ Could not capture initial 100×100 Step 1 RAM image: ${err.message}`, 'warn');
+      }
+    };
+
     if (isStartMacro) {
+      await captureStep1RefInRam();
       this.saveStartState({
         macroName: macro.name,
         isRunning: true,
@@ -727,6 +745,7 @@ export class MacroManager {
 
           nextFixacAt = Date.now() + getNextFixacDelayMs();
           await sleep(600);
+          await captureStep1RefInRam();
 
           if (!fixacResult.success) {
             ctx.log(
@@ -835,10 +854,12 @@ export class MacroManager {
             }
             const rawScreen = await adb.screencapRaw();
 
-            const resolvedImgPath =
-              targetName === 'pfp' || targetName === 'pfp.png' || targetName === 'pfp.jpg'
-                ? await RefImageManager.ensureRefImage()
-                : resolveCustomImagePath(targetName);
+            const isRamTemplate = targetName.startsWith('ram://');
+            const resolvedImgPath = isRamTemplate
+              ? targetName
+              : targetName === 'pfp' || targetName === 'pfp.png' || targetName === 'pfp.jpg'
+              ? await RefImageManager.ensureRefImage()
+              : resolveCustomImagePath(targetName);
 
             const config = botManager.getConfig();
             const hasCustomRegion =
@@ -856,7 +877,11 @@ export class MacroManager {
             let tapX = 0;
             let tapY = 0;
 
-            if (resolvedImgPath && fs.existsSync(resolvedImgPath)) {
+            const templateAvailable = isRamTemplate
+              ? TemplateMatcher.hasInMemoryTemplate(targetName)
+              : Boolean(resolvedImgPath && fs.existsSync(resolvedImgPath));
+
+            if (templateAvailable && resolvedImgPath) {
               const effectiveThreshold = step.threshold || config.matchThreshold || 0.75;
               const match = await TemplateMatcher.matchRaw(rawScreen, resolvedImgPath, {
                 scales: [0.7, 0.85, 1.0, 1.15, 1.3],
@@ -871,6 +896,107 @@ export class MacroManager {
                 await adb.tap(tapX, tapY);
                 if (!isLoopMacro) {
                   await updateProgress(`${macro.name}: step ${stepNumber} clicked ${targetName} (${(match.score * 100).toFixed(1)}%)`);
+                }
+              } else if (isStartMacro) {
+                // One-by-one button recovery for `start`:
+                // Check which button is currently on screen, click the first one found, and continue from its step!
+                const roundIndex = Math.min(3, Math.floor(i / 6)); // 0: steps 1-6, 1: steps 7-12, 2: steps 13-18, 3: steps 19-24
+                const roundBaseStepIdx = roundIndex * 6; // 0, 6, 12, or 18 (Step 1, 7, 13, or 19)
+                const roundAsBtnStepIdx = roundBaseStepIdx + 2; // 2, 8, 14, or 20 (Step 3, 9, 15, or 21)
+                const roundAsNumStepIdx = roundBaseStepIdx + 4; // 4, 10, 16, or 22 (Step 5, 11, 17, or 23)
+
+                const candidateStepIndices = [
+                  roundAsNumStepIdx,
+                  roundAsBtnStepIdx,
+                  roundBaseStepIdx
+                ];
+
+                ctx.log(
+                  `🔍 "${targetName}" not found at step ${stepNumber} (${(match.score * 100).toFixed(1)}%) — checking buttons one by one to recover...`,
+                  'warn'
+                );
+
+                let recovered = false;
+                // Try on current screen first, then if none found wait 600ms and re-check once on a fresh screen
+                for (let attempt = 0; attempt < 2 && !recovered; attempt++) {
+                  const screenToCheck = attempt === 0 ? rawScreen : await adb.screencapRaw();
+                  for (const candIdx of candidateStepIndices) {
+                    const candStep = macro.steps[candIdx];
+                    if (!candStep || candStep.type !== 'locate_and_tap' || !candStep.refPath) continue;
+
+                    const candName = candStep.refPath;
+                    const candIsRam = candName.startsWith('ram://');
+                    const candPath = candIsRam ? candName : resolveCustomImagePath(candName);
+                    const candExists = candIsRam
+                      ? TemplateMatcher.hasInMemoryTemplate(candName)
+                      : Boolean(candPath && fs.existsSync(candPath));
+                    if (!candExists || !candPath) continue;
+
+                    const candRegion =
+                      candStep.minX !== undefined &&
+                      candStep.maxX !== undefined &&
+                      candStep.minY !== undefined &&
+                      candStep.maxY !== undefined
+                        ? { minX: candStep.minX, maxX: candStep.maxX, minY: candStep.minY, maxY: candStep.maxY }
+                        : undefined;
+
+                    const candMatch = await TemplateMatcher.matchRaw(screenToCheck, candPath, {
+                      scales: [0.7, 0.85, 1.0, 1.15, 1.3],
+                      threshold: effectiveThreshold,
+                      region: candRegion
+                    });
+
+                    if (candMatch.found) {
+                      const clickX = candMatch.targetPoint.x;
+                      const clickY = candMatch.targetPoint.y;
+                      ctx.log(
+                        `🔄 Found "${candName}" (${(candMatch.score * 100).toFixed(1)}%)! Clicking (${clickX}, ${clickY}) and continuing from step ${candIdx + 1}...`,
+                        'info'
+                      );
+                      await adb.tap(clickX, clickY);
+                      i = candIdx; // Loop will increment `i` to `candIdx + 1` (the wait step right after this button)
+                      recovered = true;
+                      break;
+                    }
+                  }
+
+                  if (!recovered && attempt === 0) {
+                    await sleep(600);
+                  }
+                }
+
+                if (!recovered) {
+                  const scorePct = match.score * 100;
+                  const threshPct = effectiveThreshold * 100;
+                  const errorMsg = `❌ Image "${targetName}" NOT found in ${macro.name} step ${stepNumber} (and no fallback buttons found)! Score: ${scorePct.toFixed(1)}% (< ${threshPct.toFixed(0)}%). Stopping macro.`;
+                  ctx.log(errorMsg, 'error');
+
+                  try {
+                    const webhook = botManager.getWebhookService();
+                    if (webhook.isConfigured()) {
+                      const croppedBuffer = await TemplateMatcher.cropRawToPng(rawScreen, region);
+                      await webhook.send({
+                        content: errorMsg,
+                        fileBuffer: croppedBuffer,
+                        fileName: `not_found_step${stepNumber}.png`
+                      });
+                    }
+                  } catch (err: any) {
+                    ctx.log(`Failed to crop or send error image to Discord: ${err.message}`, 'warn');
+                  }
+
+                  this.saveStartState({
+                    isRunning: false,
+                    resumeAfterUpdate: false,
+                    autoFixacEnabled,
+                    currentStep: stepNumber,
+                    cycleCount: loopCount,
+                    totalStepsExecuted,
+                    nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now())
+                  });
+                  this.notifyCycleStopped();
+                  this.stopRequestedForRunId = runId;
+                  return { success: false, message: errorMsg, steps: stepsLog };
                 }
               } else {
                 const scorePct = match.score * 100;
@@ -1056,12 +1182,13 @@ export class MacroManager {
         createdAt: new Date().toISOString(),
         steps: [
           {
-            type: 'tap_range',
+            type: 'locate_and_tap',
+            refPath: 'ram://step1.png',
             minX: 465,
             maxX: 602,
             minY: 1109,
             maxY: 1223,
-            label: 'Random Tap X=[465..602], Y=[1109..1223]'
+            label: 'Match Step 1 RAM ref (100×100) in X=[465..602], Y=[1109..1223] & tap'
           },
           {
             type: 'wait',
@@ -1097,12 +1224,13 @@ export class MacroManager {
             label: 'Wait 600ms'
           },
           {
-            type: 'tap_range',
+            type: 'locate_and_tap',
+            refPath: 'ram://step1.png',
             minX: 465,
             maxX: 602,
             minY: 1109,
             maxY: 1223,
-            label: 'Random Tap X=[465..602], Y=[1109..1223]'
+            label: 'Match Step 1 RAM ref (100×100) in X=[465..602], Y=[1109..1223] & tap'
           },
           {
             type: 'wait',
@@ -1138,12 +1266,13 @@ export class MacroManager {
             label: 'Wait 600ms'
           },
           {
-            type: 'tap_range',
+            type: 'locate_and_tap',
+            refPath: 'ram://step1.png',
             minX: 465,
             maxX: 602,
             minY: 1109,
             maxY: 1223,
-            label: 'Random Tap X=[465..602], Y=[1109..1223]'
+            label: 'Match Step 1 RAM ref (100×100) in X=[465..602], Y=[1109..1223] & tap'
           },
           {
             type: 'wait',
@@ -1179,12 +1308,13 @@ export class MacroManager {
             label: 'Wait 600ms'
           },
           {
-            type: 'tap_range',
+            type: 'locate_and_tap',
+            refPath: 'ram://step1.png',
             minX: 465,
             maxX: 602,
             minY: 1109,
             maxY: 1223,
-            label: 'Random Tap X=[465..602], Y=[1109..1223]'
+            label: 'Match Step 1 RAM ref (100×100) in X=[465..602], Y=[1109..1223] & tap'
           },
           {
             type: 'wait',
@@ -1229,7 +1359,22 @@ export class MacroManager {
       this.persist();
     } else {
       let updated = false;
-      for (const step of existingStart.steps) {
+      for (let idx = 0; idx < existingStart.steps.length; idx++) {
+        const step = existingStart.steps[idx];
+        if (idx === 0 || idx === 6 || idx === 12 || idx === 18) {
+          if (step.type !== 'locate_and_tap' || step.refPath !== 'ram://step1.png') {
+            existingStart.steps[idx] = {
+              type: 'locate_and_tap',
+              refPath: 'ram://step1.png',
+              minX: 465,
+              maxX: 602,
+              minY: 1109,
+              maxY: 1223,
+              label: 'Match Step 1 RAM ref (100×100) in X=[465..602], Y=[1109..1223] & tap'
+            };
+            updated = true;
+          }
+        }
         if (step.type === 'wait') {
           step.ms = 600;
           step.label = 'Wait 600ms';
