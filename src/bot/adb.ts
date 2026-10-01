@@ -391,38 +391,44 @@ export class AdbController {
       }
 
       let adbTarget = await this.resolveTargetFlag();
-      const prev = this.lastTapCoords;
-      const preRelease = prev
-        ? `cmd input touchscreen motionevent UP ${prev.x} ${prev.y} >/dev/null 2>&1; `
-        : '';
-      const tapShell = `${preRelease}(cmd input touchscreen motionevent DOWN ${roundedX} ${roundedY} && sleep 0.03 && cmd input touchscreen motionevent UP ${roundedX} ${roundedY} && sleep 0.015 && cmd input touchscreen motionevent UP ${roundedX} ${roundedY}) || input touchscreen tap ${roundedX} ${roundedY}`;
-      let command = `adb ${adbTarget} shell "${tapShell}"`;
+      const clickCmd = `adb ${adbTarget} shell input touchscreen tap ${roundedX} ${roundedY}`;
+      const removeAllCmd = `adb ${adbTarget} shell "input motionevent UP ${roundedX} ${roundedY} >/dev/null 2>&1; input motionevent CANCEL 0 0 >/dev/null 2>&1"`;
 
       try {
-        const { stdout } = await execPromise(command);
+        // 1. adb click
+        const { stdout } = await execPromise(clickCmd);
+        // 2. adb remove all touches on screen
+        await execPromise(removeAllCmd).catch(() => {});
+
         this.lastTapFinishedAt = Date.now();
         this.lastTapCoords = { x: roundedX, y: roundedY };
         return {
           x: roundedX,
           y: roundedY,
-          command,
+          command: `${clickCmd} && ${removeAllCmd}`,
           success: true,
           output: stdout.trim()
         };
       } catch (err: any) {
+        await execPromise(removeAllCmd).catch(() => {});
+
         // Refresh target device and retry once in case Wireless Debugging port changed or reconnected
         adbTarget = await this.resolveTargetFlag(true);
         if (!adbTarget) {
           throw new Error('no adb device connected (run: connect <port>)');
         }
-        command = `adb ${adbTarget} shell "${tapShell}"`;
-        const { stdout } = await execPromise(command);
+        const retryClickCmd = `adb ${adbTarget} shell input touchscreen tap ${roundedX} ${roundedY}`;
+        const retryRemoveAllCmd = `adb ${adbTarget} shell "input motionevent UP ${roundedX} ${roundedY} >/dev/null 2>&1; input motionevent CANCEL 0 0 >/dev/null 2>&1"`;
+
+        const { stdout } = await execPromise(retryClickCmd);
+        await execPromise(retryRemoveAllCmd).catch(() => {});
+
         this.lastTapFinishedAt = Date.now();
         this.lastTapCoords = { x: roundedX, y: roundedY };
         return {
           x: roundedX,
           y: roundedY,
-          command,
+          command: `${retryClickCmd} && ${retryRemoveAllCmd}`,
           success: true,
           output: stdout.trim()
         };
