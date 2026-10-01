@@ -1,0 +1,6 @@
+{
+  "name": "Android ADB Discord Automation Bot",
+  "description": "Modular Discord-controlled Android automation bot powered by ADB, multi-scale visual template matching, and webhook delivery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
