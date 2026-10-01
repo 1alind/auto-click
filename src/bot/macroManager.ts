@@ -718,7 +718,7 @@ export class MacroManager {
           }
 
           nextFixacAt = Date.now() + getNextFixacDelayMs();
-          await sleep(400);
+          await sleep(600);
 
           if (!fixacResult.success) {
             ctx.log(
@@ -769,7 +769,7 @@ export class MacroManager {
           }
 
           case 'wait': {
-            const ms = Math.max(100, Number(step.ms) || 400);
+            const ms = Math.max(100, Number(step.ms) || 600);
             await sleep(ms);
             break;
           }
@@ -1057,8 +1057,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 400,
-            label: 'Wait 400ms'
+            ms: 600,
+            label: 'Wait 600ms'
           },
           {
             type: 'locate_and_tap',
@@ -1071,8 +1071,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 400,
-            label: 'Wait 400ms'
+            ms: 600,
+            label: 'Wait 600ms'
           },
           {
             type: 'locate_and_tap',
@@ -1085,8 +1085,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 400,
-            label: 'Wait 400ms'
+            ms: 600,
+            label: 'Wait 600ms'
           },
           {
             type: 'tap_range',
@@ -1098,8 +1098,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 400,
-            label: 'Wait 400ms'
+            ms: 600,
+            label: 'Wait 600ms'
           },
           {
             type: 'locate_and_tap',
@@ -1112,8 +1112,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 400,
-            label: 'Wait 400ms'
+            ms: 600,
+            label: 'Wait 600ms'
           },
           {
             type: 'locate_and_tap',
@@ -1126,8 +1126,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 400,
-            label: 'Wait 400ms'
+            ms: 600,
+            label: 'Wait 600ms'
           },
           {
             type: 'tap_range',
@@ -1139,8 +1139,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 400,
-            label: 'Wait 400ms'
+            ms: 600,
+            label: 'Wait 600ms'
           },
           {
             type: 'locate_and_tap',
@@ -1153,8 +1153,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 400,
-            label: 'Wait 400ms'
+            ms: 600,
+            label: 'Wait 600ms'
           },
           {
             type: 'locate_and_tap',
@@ -1167,8 +1167,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 400,
-            label: 'Wait 400ms'
+            ms: 600,
+            label: 'Wait 600ms'
           },
           {
             type: 'tap_range',
@@ -1180,8 +1180,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 400,
-            label: 'Wait 400ms'
+            ms: 600,
+            label: 'Wait 600ms'
           },
           {
             type: 'locate_and_tap',
@@ -1194,8 +1194,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 400,
-            label: 'Wait 400ms'
+            ms: 600,
+            label: 'Wait 600ms'
           },
           {
             type: 'locate_and_tap',
@@ -1208,8 +1208,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 400,
-            label: 'Wait 400ms'
+            ms: 600,
+            label: 'Wait 600ms'
           },
           {
             type: 'loop',
@@ -1223,8 +1223,8 @@ export class MacroManager {
       let updated = false;
       for (const step of existingStart.steps) {
         if (step.type === 'wait') {
-          step.ms = 400;
-          step.label = 'Wait 400ms';
+          step.ms = 600;
+          step.label = 'Wait 600ms';
           updated = true;
         }
         if (step.type === 'locate_and_tap' && step.refPath === 'asbtn.png') {
