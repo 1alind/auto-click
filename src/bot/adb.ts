@@ -30,6 +30,7 @@ export class AdbController {
   private autoConnectWaiters: Array<(serial: string) => void> = [];
   private tapChain: Promise<any> = Promise.resolve();
   private lastTapFinishedAt: number = 0;
+  private lastTapCoords: { x: number; y: number } | null = null;
 
   constructor(options?: { serial?: string; host?: string }) {
     if (options?.serial) this.serial = AdbController.normalizeHost(options.serial);
@@ -390,11 +391,17 @@ export class AdbController {
       }
 
       let adbTarget = await this.resolveTargetFlag();
-      let command = `adb ${adbTarget} shell input touchscreen tap ${roundedX} ${roundedY}`;
+      const prev = this.lastTapCoords;
+      const preRelease = prev
+        ? `cmd input touchscreen motionevent UP ${prev.x} ${prev.y} >/dev/null 2>&1; `
+        : '';
+      const tapShell = `${preRelease}(cmd input touchscreen motionevent DOWN ${roundedX} ${roundedY} && sleep 0.03 && cmd input touchscreen motionevent UP ${roundedX} ${roundedY} && sleep 0.015 && cmd input touchscreen motionevent UP ${roundedX} ${roundedY}) || input touchscreen tap ${roundedX} ${roundedY}`;
+      let command = `adb ${adbTarget} shell "${tapShell}"`;
 
       try {
         const { stdout } = await execPromise(command);
         this.lastTapFinishedAt = Date.now();
+        this.lastTapCoords = { x: roundedX, y: roundedY };
         return {
           x: roundedX,
           y: roundedY,
@@ -408,9 +415,10 @@ export class AdbController {
         if (!adbTarget) {
           throw new Error('no adb device connected (run: connect <port>)');
         }
-        command = `adb ${adbTarget} shell input touchscreen tap ${roundedX} ${roundedY}`;
+        command = `adb ${adbTarget} shell "${tapShell}"`;
         const { stdout } = await execPromise(command);
         this.lastTapFinishedAt = Date.now();
+        this.lastTapCoords = { x: roundedX, y: roundedY };
         return {
           x: roundedX,
           y: roundedY,
