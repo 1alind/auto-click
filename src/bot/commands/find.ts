@@ -107,20 +107,20 @@ export const findCommand: CommandDefinition = {
       await sleep(3000);
       steps[steps.length - 1].status = 'completed';
 
-      // Step 5: Take a raw Android screen capture in RAM & search for pfp
-      await updateProgress('find: step 3 searching for pfp');
+      // Step 5: Take a raw Android screen capture in RAM & search for pfp.png
+      await updateProgress('find: step 3 searching for pfp.png');
       recordStep(5, 'Capture Screenshot', 'Capturing raw device screen in RAM via ADB...', 'running');
       const rawScreen1 = await adb.screencapRaw();
       steps[steps.length - 1].status = 'completed';
       steps[steps.length - 1].data = { screenshotSize: rawScreen1.data.length };
 
-      // Step 6 & 7: Visually locate pfp inside the raw screen within region X:79-220, Y:523-1721
+      // Step 6 & 7: Visually locate pfp.png inside the raw screen within region X:79-220, Y:523-1721
       const refPath = await RefImageManager.ensureRefImage();
       const searchRegion = { minX: 79, maxX: 220, minY: 523, maxY: 1721 };
       recordStep(
         6,
         'Locate Reference Image',
-        `Searching for ${refPath} in area X=[79..220], Y=[523..1721]...`,
+        `Searching for pfp.png (${refPath}) in area X=[79..220], Y=[523..1721]...`,
         'running'
       );
       const config = botManager.getConfig();
@@ -142,7 +142,7 @@ export const findCommand: CommandDefinition = {
       };
 
       if (!matchResult.found) {
-        const errorMsg = `❌ Image "pfp" NOT found in find step 3! Score: ${(matchResult.score * 100).toFixed(1)}% (< ${(config.matchThreshold * 100).toFixed(0)}%). Stopping script.`;
+        const errorMsg = `❌ Image "pfp.png" NOT found in find step 3! Score: ${(matchResult.score * 100).toFixed(1)}% (< ${(config.matchThreshold * 100).toFixed(0)}%). Stopping script.`;
         ctx.log(errorMsg, 'error');
 
         // Crop the search area directly from the raw screen buffer and send to Discord
@@ -172,7 +172,7 @@ export const findCommand: CommandDefinition = {
       const tapTargetX = matchResult.targetPoint.x;
       const tapTargetY = matchResult.targetPoint.y;
       const tapMatchResult = await adb.tap(tapTargetX, tapTargetY);
-      await updateProgress('find: step 3 clicked pfp');
+      await updateProgress('find: step 3 clicked pfp.png');
       recordStep(
         8,
         'Click Matched Target Area',

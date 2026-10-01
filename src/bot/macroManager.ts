@@ -829,14 +829,14 @@ export class MacroManager {
           }
 
           case 'locate_and_tap': {
-            const targetName = step.refPath || 'pfp.jpg';
+            const targetName = step.refPath || 'pfp.png';
             if (!isLoopMacro) {
               await updateProgress(`${macro.name}: step ${stepNumber} searching for ${targetName}`);
             }
             const rawScreen = await adb.screencapRaw();
 
             const resolvedImgPath =
-              targetName === 'pfp' || targetName === 'pfp.jpg'
+              targetName === 'pfp' || targetName === 'pfp.png' || targetName === 'pfp.jpg'
                 ? await RefImageManager.ensureRefImage()
                 : resolveCustomImagePath(targetName);
 

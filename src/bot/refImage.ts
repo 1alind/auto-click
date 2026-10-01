@@ -40,7 +40,7 @@ export class RefImageManager {
       path.resolve(process.cwd(), 'ref')
     ];
 
-    const preferredNames = ['pfp.jpg', 'pfp.jpeg', 'pfp.png', 'pfp.bmp'];
+    const preferredNames = ['pfp.png', 'pfp.jpg', 'pfp.jpeg', 'pfp.bmp'];
 
     for (const dir of searchDirs) {
       if (!fs.existsSync(dir)) continue;
@@ -50,14 +50,14 @@ export class RefImageManager {
       }
       try {
         const files = fs.readdirSync(dir);
-        const match = files.find((f) => /^pfp\.(jpg|jpeg|png|bmp)$/i.test(f));
+        const match = files.find((f) => /^pfp\.(png|jpg|jpeg|bmp)$/i.test(f));
         if (match) return path.join(dir, match);
       } catch {
         // ignore
       }
     }
 
-    return path.join(this.getRefDir(), 'pfp.jpg');
+    return path.join(this.getRefDir(), 'pfp.png');
   }
 
   public static async ensureRefImage(): Promise<string> {
@@ -82,7 +82,7 @@ export class RefImageManager {
 
   public static async getRefBase64(): Promise<string> {
     const buf = await this.getRefBuffer();
-    return `data:image/jpeg;base64,${buf.toString('base64')}`;
+    return `data:image/png;base64,${buf.toString('base64')}`;
   }
 
   public static async saveRefImage(buffer: Buffer): Promise<void> {
@@ -90,10 +90,10 @@ export class RefImageManager {
     if (!fs.existsSync(targetDir)) {
       fs.mkdirSync(targetDir, { recursive: true });
     }
-    const targetPath = path.join(targetDir, 'pfp.jpg');
+    const targetPath = path.join(targetDir, 'pfp.png');
     const img = await Jimp.read(buffer);
-    const jpegBuf = await img.getBuffer('image/jpeg');
-    await fs.promises.writeFile(targetPath, jpegBuf);
+    const pngBuf = await img.getBuffer('image/png');
+    await fs.promises.writeFile(targetPath, pngBuf);
   }
 
   public static async generateDefaultPfp(targetFile?: string): Promise<void> {
@@ -126,7 +126,7 @@ export class RefImageManager {
       }
     }
 
-    const jpegBuf = await img.getBuffer('image/jpeg');
-    await fs.promises.writeFile(outPath, jpegBuf);
+    const pngBuf = await img.getBuffer('image/png');
+    await fs.promises.writeFile(outPath, pngBuf);
   }
 }
