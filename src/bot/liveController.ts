@@ -22,8 +22,10 @@ export interface LiveTunnelStatus {
 }
 
 interface CachedFrame {
-  rawPng: Buffer;
-  fastJpeg: Buffer | null;
+  rawScreen: { data: Buffer; width: number; height: number };
+  fastJpegLow: Buffer | null;
+  fastJpegMed: Buffer | null;
+  fullPng: Buffer | null;
   width: number;
   height: number;
   timestamp: number;
@@ -204,15 +206,15 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
       <div class="row">
         <button id="btnStream" class="btn-green">● Live</button>
         <select id="selQuality" title="Stream Quality">
-          <option value="auto" selected>Auto</option>
-          <option value="low">Fast</option>
-          <option value="hd">HD</option>
+          <option value="auto" selected>Fast HD (540p)</option>
+          <option value="low">Ultra Fast (360p)</option>
+          <option value="hd">Lossless PNG (Slow)</option>
         </select>
         <select id="selSpeed" title="Refresh Interval">
+          <option value="150" selected>Max FPS</option>
           <option value="400">0.4s</option>
-          <option value="700" selected>0.7s</option>
-          <option value="1200">1.2s</option>
-          <option value="2500">2.5s</option>
+          <option value="800">0.8s</option>
+          <option value="1500">1.5s</option>
         </select>
         <button id="btnRefresh">↻</button>
       </div>
@@ -250,7 +252,7 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
   <script>
     let mode = 'touch';
     let streaming = true;
-    let intervalMs = 700;
+    let intervalMs = 150;
     let quality = 'auto';
     let screenW = 1080, screenH = 2400;
     let inFlight = false;
@@ -486,58 +488,67 @@ export class LiveController {
   private static requestHandler: Express | null = null;
 
   /**
-   * Detects if an HTTP request came over the Internet (Cloudflare tunnel) or requested fast/low quality.
+   * Returns 'hd' (lossless PNG), 'med' (2x downsampled JPEG, great for Local Wi-Fi), or 'low' (3x downsampled JPEG, great for Internet).
    */
-  public static shouldCompressFrame(req: Request): boolean {
+  public static getStreamQualityMode(req: Request): 'low' | 'med' | 'hd' {
     const q = String(req.query.q || 'auto').toLowerCase();
-    if (q === 'hd') return false;
-    if (q === 'low' || q === 'fast') return true;
-    if (this.currentMode === 'net') return true;
+    if (q === 'hd') return 'hd';
+    if (q === 'low' || q === 'fast') return 'low';
+    if (this.currentMode === 'net') return 'low';
     const host = String(req.headers.host || '').toLowerCase();
     if (host.includes('trycloudflare.com') || req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for']) {
-      return true;
+      return 'low';
     }
-    return false;
+    // Default 'auto' on local Wi-Fi uses fast 2x JPEG (~45 KB, 10x faster than 3MB PNG!)
+    return 'med';
   }
 
   /**
-   * Downsamples the raw PNG by 3x using fast nearest-neighbor stride copy (~2ms)
-   * and encodes as a compact JPEG (quality 45, ~20-35 KB) so Internet streaming is ultra-fast.
+   * Downsamples the raw RGBA buffer directly in RAM (skipping PNG encode/decode completely!)
+   * and encodes a compact JPEG in ~15ms.
    */
-  public static async getOrCreateFastJpeg(frame: CachedFrame): Promise<Buffer> {
-    if (frame.fastJpeg) return frame.fastJpeg;
+  public static async getOrCreateFastJpeg(frame: CachedFrame, mode: 'low' | 'med' = 'med'): Promise<Buffer> {
+    if (mode === 'low' && frame.fastJpegLow) return frame.fastJpegLow;
+    if (mode === 'med' && frame.fastJpegMed) return frame.fastJpegMed;
 
-    try {
-      const src = await Jimp.read(frame.rawPng);
-      const srcW = src.bitmap.width;
-      const srcH = src.bitmap.height;
-      const step = 3; // 1080x2400 -> 360x800 (~22 KB JPEG)
-      const dstW = Math.max(1, Math.floor(srcW / step));
-      const dstH = Math.max(1, Math.floor(srcH / step));
+    const srcW = frame.width;
+    const srcH = frame.height;
+    const step = mode === 'low' ? 3 : 2; // 2x = 540x1200 (Local Wi-Fi), 3x = 360x800 (Internet)
+    const dstW = Math.max(1, Math.floor(srcW / step));
+    const dstH = Math.max(1, Math.floor(srcH / step));
 
-      const dst = new Jimp({ width: dstW, height: dstH, color: 0x000000ff });
-      const srcData = src.bitmap.data;
-      const dstData = dst.bitmap.data;
+    const dst = new Jimp({ width: dstW, height: dstH, color: 0x000000ff });
+    const srcData = frame.rawScreen.data;
+    const dstData = dst.bitmap.data;
 
-      let dstIdx = 0;
-      for (let y = 0; y < dstH; y++) {
-        const srcRowOffset = y * step * srcW;
-        for (let x = 0; x < dstW; x++) {
-          const srcIdx = (srcRowOffset + x * step) * 4;
-          dstData[dstIdx] = srcData[srcIdx];
-          dstData[dstIdx + 1] = srcData[srcIdx + 1];
-          dstData[dstIdx + 2] = srcData[srcIdx + 2];
-          dstData[dstIdx + 3] = 255;
-          dstIdx += 4;
-        }
+    let dstIdx = 0;
+    for (let y = 0; y < dstH; y++) {
+      const srcRowOffset = y * step * srcW;
+      for (let x = 0; x < dstW; x++) {
+        const srcIdx = (srcRowOffset + x * step) * 4;
+        dstData[dstIdx] = srcData[srcIdx];
+        dstData[dstIdx + 1] = srcData[srcIdx + 1];
+        dstData[dstIdx + 2] = srcData[srcIdx + 2];
+        dstData[dstIdx + 3] = 255;
+        dstIdx += 4;
       }
-
-      const jpegBuf = await dst.getBuffer('image/jpeg', { quality: 45 });
-      frame.fastJpeg = jpegBuf;
-      return jpegBuf;
-    } catch {
-      return frame.rawPng;
     }
+
+    const jpegQuality = mode === 'low' ? 50 : 68;
+    const jpegBuf = await dst.getBuffer('image/jpeg', { quality: jpegQuality });
+    if (mode === 'low') {
+      frame.fastJpegLow = jpegBuf;
+    } else {
+      frame.fastJpegMed = jpegBuf;
+    }
+    return jpegBuf;
+  }
+
+  public static async getOrCreateFullPng(frame: CachedFrame): Promise<Buffer> {
+    if (frame.fullPng) return frame.fullPng;
+    const pngBuf = await TemplateMatcher.cropRawToPng(frame.rawScreen);
+    frame.fullPng = pngBuf;
+    return pngBuf;
   }
 
   private static getOrCreateExpressApp(): Express {
@@ -575,19 +586,20 @@ export class LiveController {
       try {
         const forceFresh = req.query.fresh === '1';
         const frame = await this.captureLiveFrame(forceFresh);
-        const compress = this.shouldCompressFrame(req);
+        const qMode = this.getStreamQualityMode(req);
 
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
         res.setHeader('X-Screen-Width', String(frame.width));
         res.setHeader('X-Screen-Height', String(frame.height));
 
-        if (compress) {
-          const jpegBuf = await this.getOrCreateFastJpeg(frame);
+        if (qMode !== 'hd') {
+          const jpegBuf = await this.getOrCreateFastJpeg(frame, qMode);
           res.setHeader('Content-Type', 'image/jpeg');
           res.send(jpegBuf);
         } else {
+          const pngBuf = await this.getOrCreateFullPng(frame);
           res.setHeader('Content-Type', 'image/png');
-          res.send(frame.rawPng);
+          res.send(pngBuf);
         }
       } catch (err: any) {
         res.status(500).json({ success: false, message: err.message });
@@ -642,9 +654,23 @@ export class LiveController {
         const cleanName = path.basename(rawName);
         const savedFileName = /\.(png|jpg|jpeg)$/i.test(cleanName) ? cleanName : `${cleanName}.png`;
 
-        // Always crop from the original 100% lossless full-res PNG!
+        // Always crop directly from the original 100% lossless full-res raw RGBA buffer in RAM!
         const last = this.getLastFrame() || (await this.captureLiveFrame(true));
-        const cropped = await TemplateMatcher.cropRegion(last.rawPng, minX, maxX, minY, maxY);
+        const lowX = Math.max(0, Math.min(minX, maxX));
+        const highX = Math.min(last.width, Math.max(minX, maxX));
+        const lowY = Math.max(0, Math.min(minY, maxY));
+        const highY = Math.min(last.height, Math.max(minY, maxY));
+        const croppedBuffer = await TemplateMatcher.cropRawToPng(last.rawScreen, {
+          minX: lowX,
+          maxX: highX,
+          minY: lowY,
+          maxY: highY
+        });
+        const cropped = {
+          buffer: croppedBuffer,
+          width: Math.max(1, highX - lowX),
+          height: Math.max(1, highY - lowY)
+        };
 
         const homeDir = process.env.HOME || os.homedir() || '';
         const sharedDirs = [
@@ -954,7 +980,7 @@ export class LiveController {
   }
 
   public static async captureLiveFrame(forceFresh = false): Promise<CachedFrame> {
-    if (!forceFresh && this.lastFrame && Date.now() - this.lastFrame.timestamp < 120) {
+    if (!forceFresh && this.lastFrame && Date.now() - this.lastFrame.timestamp < 80) {
       return this.lastFrame;
     }
 
@@ -966,24 +992,15 @@ export class LiveController {
       try {
         const { botManager } = await import('./botManager');
         const adb = botManager.getAdbController();
-        const rawPng = await adb.screencap();
-
-        let width = 1080;
-        let height = 2400;
-        if (rawPng.length >= 24 && rawPng[0] === 0x89 && rawPng[1] === 0x50) {
-          const w = rawPng.readUInt32BE(16);
-          const h = rawPng.readUInt32BE(20);
-          if (w > 0 && w < 10000 && h > 0 && h < 10000) {
-            width = w;
-            height = h;
-          }
-        }
+        const rawScreen = await adb.screencapRaw();
 
         const frame: CachedFrame = {
-          rawPng,
-          fastJpeg: null,
-          width,
-          height,
+          rawScreen,
+          fastJpegLow: null,
+          fastJpegMed: null,
+          fullPng: null,
+          width: rawScreen.width,
+          height: rawScreen.height,
           timestamp: Date.now()
         };
         this.lastFrame = frame;

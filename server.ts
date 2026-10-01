@@ -304,19 +304,20 @@ async function startServer() {
     try {
       const forceFresh = req.query.fresh === '1';
       const frame = await LiveController.captureLiveFrame(forceFresh);
-      const compress = LiveController.shouldCompressFrame(req);
+      const qMode = LiveController.getStreamQualityMode(req);
 
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       res.setHeader('X-Screen-Width', String(frame.width));
       res.setHeader('X-Screen-Height', String(frame.height));
 
-      if (compress) {
-        const jpegBuf = await LiveController.getOrCreateFastJpeg(frame);
+      if (qMode !== 'hd') {
+        const jpegBuf = await LiveController.getOrCreateFastJpeg(frame, qMode);
         res.setHeader('Content-Type', 'image/jpeg');
         res.send(jpegBuf);
       } else {
+        const pngBuf = await LiveController.getOrCreateFullPng(frame);
         res.setHeader('Content-Type', 'image/png');
-        res.send(frame.rawPng);
+        res.send(pngBuf);
       }
     } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });
@@ -399,7 +400,21 @@ async function startServer() {
       const savedFileName = /\.(png|jpg|jpeg)$/i.test(cleanName) ? cleanName : `${cleanName}.png`;
 
       const last = LiveController.getLastFrame() || (await LiveController.captureLiveFrame(true));
-      const cropped = await TemplateMatcher.cropRegion(last.rawPng, minX, maxX, minY, maxY);
+      const lowX = Math.max(0, Math.min(minX, maxX));
+      const highX = Math.min(last.width, Math.max(minX, maxX));
+      const lowY = Math.max(0, Math.min(minY, maxY));
+      const highY = Math.min(last.height, Math.max(minY, maxY));
+      const croppedBuffer = await TemplateMatcher.cropRawToPng(last.rawScreen, {
+        minX: lowX,
+        maxX: highX,
+        minY: lowY,
+        maxY: highY
+      });
+      const cropped = {
+        buffer: croppedBuffer,
+        width: Math.max(1, highX - lowX),
+        height: Math.max(1, highY - lowY)
+      };
 
       const homeDir = process.env.HOME || os.homedir() || '';
       const sharedDirs = [

@@ -34,7 +34,7 @@ export default function App() {
   const [liveStatus, setLiveStatus] = useState<LiveStatusResponse | null>(null);
   const [botStatus, setBotStatus] = useState<BotStatusResponse | null>(null);
   const [isStreaming, setIsStreaming] = useState<boolean>(true);
-  const [refreshIntervalMs, setRefreshIntervalMs] = useState<number>(800);
+  const [refreshIntervalMs, setRefreshIntervalMs] = useState<number>(200);
   const [frameUrl, setFrameUrl] = useState<string>('');
   const [screenSize, setScreenSize] = useState<{ width: number; height: number }>({
     width: 1080,
