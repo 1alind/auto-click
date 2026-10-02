@@ -68,6 +68,59 @@ function isTextPixel(r: number, g: number, b: number): boolean {
   return r >= 165 && g >= 165 && b >= 165 && Math.abs(r - g) <= 40 && Math.abs(g - b) <= 40;
 }
 
+/**
+ * Verifies the white word "Box" inside X: 132-271, Y: 231-338.
+ */
+async function verifyBoxWordInRegion(
+  rawScreen: { data: Buffer; width: number; height: number }
+): Promise<{ found: boolean; text: string }> {
+  const roiX = 132;
+  const roiY = 231;
+  const roiW = 271 - 132;
+  const roiH = 338 - 231;
+
+  // Create 2x scaled binary image of white text in 132-271 231-338 for crisp OCR
+  const out = new Jimp({ width: roiW, height: roiH, color: 0xffffffff });
+  const src = rawScreen.data;
+  const dst = out.bitmap.data;
+  const fullW = rawScreen.width;
+
+  let whitePixelCount = 0;
+  for (let y = 0; y < roiH; y++) {
+    const srcRow = (roiY + y) * fullW;
+    const dstRow = y * roiW;
+    for (let x = 0; x < roiW; x++) {
+      const sIdx = (srcRow + (roiX + x)) * 4;
+      const dIdx = (dstRow + x) * 4;
+      const r = src[sIdx];
+      const g = src[sIdx + 1];
+      const b = src[sIdx + 2];
+
+      const isWhite = isTextPixel(r, g, b);
+      if (isWhite) whitePixelCount++;
+      const v = isWhite ? 0 : 255;
+      dst[dIdx] = v;
+      dst[dIdx + 1] = v;
+      dst[dIdx + 2] = v;
+      dst[dIdx + 3] = 255;
+    }
+  }
+
+  const scaled = out.resize({ w: roiW * 2, h: roiH * 2 });
+  const buf = await scaled.getBuffer('image/png');
+  const { fullText } = await recognizeLinesWithTimeout(buf, roiX, roiY, 2, 3500);
+  const clean = fullText.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  const matched =
+    clean.includes('box') ||
+    clean.includes('b0x') ||
+    clean.includes('bo') ||
+    clean.includes('ox') ||
+    (whitePixelCount >= 45 && clean.length >= 2);
+
+  return { found: matched, text: fullText.trim() || (matched ? 'Box' : '') };
+}
+
 async function createWhiteTextBuffer(
   rawScreen: { data: Buffer; width: number; height: number },
   roiX: number,
@@ -274,39 +327,24 @@ export const subCommand: CommandDefinition = {
         if (!(await interruptibleSleep(500))) break;
 
         // =========================================================================
-        // STEP 2: Verify box.png in 132-271 231-338 (do NOT click it),
+        // STEP 2: Verify white word "Box" in 132-271 231-338 (do NOT click it),
         // then click 863-937 509-583
         // =========================================================================
-        await updateStatus(`${cyclePrefix}: step 2/12 (verifying box.png & clicking 863-937 509-583)...`);
-
-        const boxPath = resolveAutoclickImagePath('box.png');
-        if (!boxPath) {
-          const errMsg = '❌ sub error: `box.png` not found in `/sdcard/autoclick/`';
-          await updateStatus(errMsg);
-          if (!webhook.isConfigured() && ctx.reply) await ctx.reply(errMsg);
-          return { success: false, message: errMsg, steps: stepsLog };
-        }
+        await updateStatus(`${cyclePrefix}: step 2/12 (verifying word "Box" in 132-271 231-338 & clicking 863-937 509-583)...`);
 
         const step2VerifyRegion = { minX: 132, maxX: 271, minY: 231, maxY: 338 };
         let rawScreen2 = await adb.screencapRaw();
-        let boxMatch = await TemplateMatcher.matchRaw(rawScreen2, boxPath, {
-          scales: [0.7, 0.85, 1.0, 1.15, 1.3],
-          threshold,
-          region: step2VerifyRegion
-        });
+        let boxCheck = await verifyBoxWordInRegion(rawScreen2);
 
-        if (!boxMatch.found) {
+        // Retry up to 2 more times (500ms apart) in case the inventory page is still animating open
+        for (let retry = 0; retry < 2 && !boxCheck.found; retry++) {
           if (!(await interruptibleSleep(500))) break;
           rawScreen2 = await adb.screencapRaw();
-          boxMatch = await TemplateMatcher.matchRaw(rawScreen2, boxPath, {
-            scales: [0.7, 0.85, 1.0, 1.15, 1.3],
-            threshold,
-            region: step2VerifyRegion
-          });
+          boxCheck = await verifyBoxWordInRegion(rawScreen2);
         }
 
-        if (!boxMatch.found) {
-          const errMsg = `❌ ${cyclePrefix} step 2 failed: \`box.png\` not found in 132-271 231-338 (${(boxMatch.score * 100).toFixed(1)}%)`;
+        if (!boxCheck.found) {
+          const errMsg = `❌ ${cyclePrefix} step 2 failed: word "Box" not found in 132-271 231-338 (OCR read: "${boxCheck.text || 'none'}")`;
           ctx.log(errMsg, 'error');
           if (webhook.isConfigured()) {
             const cropBuf = await TemplateMatcher.cropRawToPng(rawScreen2, step2VerifyRegion);
@@ -324,13 +362,13 @@ export const subCommand: CommandDefinition = {
         if (subStopRequested) break;
         const tap2 = await adb.tapRandomRange(863, 937, 509, 583);
         ctx.log(
-          `✅ [${cyclePrefix}] Step 2: Verified box.png (${(boxMatch.score * 100).toFixed(1)}%) & clicked (${tap2.x}, ${tap2.y}) in 863-937 509-583`,
+          `✅ [${cyclePrefix}] Step 2: Verified word "${boxCheck.text}" in 132-271 231-338 & clicked (${tap2.x}, ${tap2.y}) in 863-937 509-583`,
           'info'
         );
         stepsLog.push({
           step: 2,
-          title: 'Verify box.png (132-271 231-338) & Tap 863-937 509-583',
-          description: `Verified box.png (${(boxMatch.score * 100).toFixed(1)}%) & tapped (${tap2.x}, ${tap2.y})`,
+          title: 'Verify word "Box" (132-271 231-338) & Tap 863-937 509-583',
+          description: `Verified "${boxCheck.text}" & tapped (${tap2.x}, ${tap2.y})`,
           timestamp: Date.now(),
           status: 'completed'
         });
