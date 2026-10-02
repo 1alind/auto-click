@@ -233,6 +233,7 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
 
     <div id="viewport" class="viewport">
       <video id="liveVideo" autoplay muted playsinline style="display:none;"></video>
+      <canvas id="liveCanvas" style="display:none;"></canvas>
       <img id="screenImg" alt="Live Screen" />
       <div id="tapMarker" class="tap-marker"></div>
       <div id="boxOverlay" class="box-overlay"></div>
@@ -260,6 +261,8 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
     let h264Abort = null;
 
     const videoEl = document.getElementById('liveVideo');
+    const liveCanvas = document.getElementById('liveCanvas');
+    const liveCtx = liveCanvas.getContext('2d');
     const imgEl = document.getElementById('screenImg');
     const viewport = document.getElementById('viewport');
     const coordText = document.getElementById('coordText');
@@ -301,6 +304,7 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
         jmuxer = null;
       }
       videoEl.style.display = 'none';
+      liveCanvas.style.display = 'none';
       imgEl.style.display = 'block';
     }
 
@@ -311,29 +315,41 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
         return;
       }
       if (!canUseMse) {
-        // Browser doesn't support MediaSource (e.g. older iOS Safari) -> switch to ultra-low 12KB frame stream
         quality = 'low';
         document.getElementById('selQuality').value = 'low';
         fetchFrame(true);
         return;
       }
 
+      // Show 1 initial snapshot immediately so the screen isn't blank before first H.264 frame
+      fetchFrame(true);
+
       try {
         jmuxer = new JMuxer({
           node: 'liveVideo',
           mode: 'video',
-          flushingTime: 0,
+          flushingTime: 1,
+          maxDelay: 10,
           clearBuffer: true,
-          fps: 60,
+          fps: 30,
           debug: false
         });
 
-        videoEl.onloadeddata = () => {
-          if (quality === 'h264' && streaming) {
-            videoEl.style.display = 'block';
-            imgEl.style.display = 'none';
-            videoEl.play().catch(() => {});
-          }
+        // Keep <video> locked to the live edge with zero buffer lag!
+        videoEl.ontimeupdate = () => {
+          try {
+            if (videoEl.buffered && videoEl.buffered.length > 0) {
+              const end = videoEl.buffered.end(videoEl.buffered.length - 1);
+              const lag = end - videoEl.currentTime;
+              if (lag > 0.25) {
+                videoEl.currentTime = end - 0.01;
+              } else if (lag > 0.08) {
+                videoEl.playbackRate = 1.35;
+              } else {
+                videoEl.playbackRate = 1.0;
+              }
+            }
+          } catch {}
         };
 
         h264Abort = new AbortController();
@@ -343,16 +359,26 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
         if (!res.ok || !res.body) return;
 
         const reader = res.body.getReader();
+        let gotFirstChunk = false;
         while (streaming && quality === 'h264') {
           const { done, value } = await reader.read();
           if (done) break;
           if (value && value.byteLength > 0 && jmuxer) {
-            if (videoEl.style.display === 'none') {
+            if (!gotFirstChunk) {
+              gotFirstChunk = true;
               videoEl.style.display = 'block';
               imgEl.style.display = 'none';
               videoEl.play().catch(() => {});
             }
             jmuxer.feed({ video: value });
+            try {
+              if (videoEl.buffered && videoEl.buffered.length > 0) {
+                const end = videoEl.buffered.end(videoEl.buffered.length - 1);
+                if (end - videoEl.currentTime > 0.2) {
+                  videoEl.currentTime = end - 0.01;
+                }
+              }
+            } catch {}
           }
         }
       } catch (e) {
@@ -574,10 +600,13 @@ export class LiveController {
   private static lastFrame: CachedFrame | null = null;
   private static requestHandler: Express | null = null;
   private static activeH264Proc: ChildProcess | null = null;
+  private static workingH264SizeIdx = 0;
 
   /**
-   * Streams raw H.264 NAL units directly from Android's hardware MediaCodec encoder at ultra-low bitrate:
-   * `adb exec-out screenrecord --output-format=h264 --size 368x800 --bit-rate 500000 -`
+   * Streams raw H.264 NAL units directly from Android's hardware MediaCodec encoder.
+   * Automatically verifies the 0x00 0x00 0x00 0x01 Annex-B start code so if a phone's MediaCodec
+   * rejects a resolution (and prints an error text to stdout), it immediately switches to the next
+   * supported resolution without sending corrupt text to the browser!
    */
   public static async streamH264(req: Request, res: express.Response): Promise<void> {
     if (this.activeH264Proc) {
@@ -602,47 +631,81 @@ export class LiveController {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Connection', 'keep-alive');
 
+    const sizeProfiles: Array<string | null> = ['540x1200', '720x1600', '720x1280', '540x960', null];
     let closed = false;
-    let bytesSent = 0;
 
-    const spawnStream = (useCustomSize: boolean) => {
-      if (closed) return;
+    const trySpawnProfile = (profileIdx: number) => {
+      if (closed || profileIdx >= sizeProfiles.length) {
+        if (!res.writableEnded) res.end();
+        return;
+      }
+
+      const sizeArg = sizeProfiles[profileIdx];
       const args = [
         ...baseArgs,
         'exec-out',
         'screenrecord',
         '--output-format=h264',
-        ...(useCustomSize ? ['--size', '368x800'] : []),
+        ...(sizeArg ? ['--size', sizeArg] : []),
         '--bit-rate',
-        '500000',
+        '4000000',
         '-'
       ];
+
       const proc = spawn('adb', args, { stdio: ['ignore', 'pipe', 'ignore'] });
       this.activeH264Proc = proc;
 
-      // Nudge SurfaceFlinger once after 180ms so static screens emit an immediate keyframe
+      let verifiedH264 = false;
+      let headerBuf = Buffer.alloc(0);
+
+      // Nudge SurfaceFlinger once after 150ms so static screens emit an immediate keyframe
       setTimeout(() => {
-        if (!closed && bytesSent === 0) {
+        if (!closed && this.activeH264Proc === proc) {
           spawn('adb', [...baseArgs, 'shell', 'input', 'motionevent', 'CANCEL', '0', '0'], {
             stdio: 'ignore'
           });
         }
-      }, 180);
+      }, 150);
 
       proc.stdout?.on('data', (chunk: Buffer) => {
-        bytesSent += chunk.length;
-        if (!res.writableEnded) {
-          res.write(chunk);
+        if (closed || res.writableEnded) return;
+
+        if (!verifiedH264) {
+          headerBuf = Buffer.concat([headerBuf, chunk]);
+          if (headerBuf.length < 4) return;
+
+          // Every valid H.264 Annex-B stream starts with 00 00 00 01 (or 00 00 01)
+          const isAnnexB =
+            (headerBuf[0] === 0x00 &&
+              headerBuf[1] === 0x00 &&
+              headerBuf[2] === 0x00 &&
+              headerBuf[3] === 0x01) ||
+            (headerBuf[0] === 0x00 && headerBuf[1] === 0x00 && headerBuf[2] === 0x01);
+
+          if (!isAnnexB) {
+            // `screenrecord` printed an error message (e.g. unsupported resolution) -> try next size!
+            try {
+              proc.kill('SIGTERM');
+            } catch {}
+            return;
+          }
+
+          verifiedH264 = true;
+          this.workingH264SizeIdx = profileIdx;
+          res.write(headerBuf);
+          headerBuf = Buffer.alloc(0);
+          return;
         }
+
+        res.write(chunk);
       });
 
       proc.on('exit', () => {
         if (this.activeH264Proc === proc) {
           this.activeH264Proc = null;
         }
-        // If custom size 368x800 was rejected by the device (0 bytes sent), fallback to native size @ 500Kbps
-        if (!closed && useCustomSize && bytesSent === 0) {
-          spawnStream(false);
+        if (!closed && !verifiedH264) {
+          trySpawnProfile(profileIdx + 1);
           return;
         }
         if (!res.writableEnded) {
@@ -651,13 +714,17 @@ export class LiveController {
       });
 
       proc.on('error', () => {
+        if (!closed && !verifiedH264) {
+          trySpawnProfile(profileIdx + 1);
+          return;
+        }
         if (!res.writableEnded) {
           res.end();
         }
       });
     };
 
-    spawnStream(true);
+    trySpawnProfile(this.workingH264SizeIdx);
 
     req.on('close', () => {
       closed = true;
