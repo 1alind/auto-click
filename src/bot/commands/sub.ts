@@ -474,7 +474,8 @@ export const subCommand: CommandDefinition = {
           status: 'completed'
         });
 
-        if (!(await interruptibleSleep(500))) break;
+        // Wait 800ms for the subuse popup list to finish opening before scrolling
+        if (!(await interruptibleSleep(800))) break;
 
         // =========================================================================
         // STEP 5: Scroll down (swipe from bottom to top) inside 428-595 1253-1783
@@ -482,12 +483,18 @@ export const subCommand: CommandDefinition = {
         await updateStatus(`${cyclePrefix}: step 5/12 (scrolling down in 428-595 1253-1783)...`);
 
         if (subStopRequested) break;
-        const swipeX1 = Math.floor(428 + Math.random() * (595 - 428 + 1));
-        const swipeY1 = Math.floor(1758 + Math.random() * (1783 - 1758 + 1)); // start near bottom (1758..1783)
-        const swipeX2 = Math.floor(428 + Math.random() * (595 - 428 + 1));
-        const swipeY2 = Math.floor(1253 + Math.random() * 25); // end near top (1253..1278)
+        // Start slightly inside the bottom of 1253-1783 (Y: 1650..1710) so ACTION_DOWN lands inside the scroll list
+        // (not on the bottom border/frame at 1783), and drag smoothly up to the top (Y: 1260..1295) over 550ms
+        const swipeX1 = Math.floor(460 + Math.random() * (565 - 460 + 1));
+        const swipeY1 = Math.floor(1650 + Math.random() * 60); // 1650..1710
+        const swipeX2 = swipeX1 + Math.floor(Math.random() * 11) - 5;
+        const swipeY2 = Math.floor(1260 + Math.random() * 35); // 1260..1295
 
-        await adb.swipe(swipeX1, swipeY1, swipeX2, swipeY2, 350);
+        await adb.swipe(swipeX1, swipeY1, swipeX2, swipeY2, 550);
+        if (!(await interruptibleSleep(300))) break;
+        // Second smooth stroke to ensure the list is scrolled all the way down
+        await adb.swipe(swipeX1, swipeY1, swipeX2, swipeY2, 550);
+
         ctx.log(
           `✅ [${cyclePrefix}] Step 5: Scrolled down (${swipeX1}, ${swipeY1}) -> (${swipeX2}, ${swipeY2}) in 428-595 1253-1783`,
           'info'

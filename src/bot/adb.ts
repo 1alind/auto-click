@@ -491,12 +491,10 @@ export class AdbController {
       }
 
       let adbTarget = await this.resolveTargetFlag();
-      const swipeCmd = `adb ${adbTarget} shell input touchscreen swipe ${rx1} ${ry1} ${rx2} ${ry2} ${dur}`;
-      const removeAllCmd = `adb ${adbTarget} shell "input motionevent UP ${rx2} ${ry2} >/dev/null 2>&1; input motionevent CANCEL 0 0 >/dev/null 2>&1"`;
+      const swipeCmd = `adb ${adbTarget} shell input swipe ${rx1} ${ry1} ${rx2} ${ry2} ${dur}`;
 
       try {
         const { stdout } = await execPromise(swipeCmd);
-        await execPromise(removeAllCmd).catch(() => {});
         this.lastTapFinishedAt = Date.now();
         return {
           success: true,
@@ -504,15 +502,12 @@ export class AdbController {
           output: stdout.trim()
         };
       } catch {
-        await execPromise(removeAllCmd).catch(() => {});
         adbTarget = await this.resolveTargetFlag(true);
         if (!adbTarget) {
           throw new Error('no adb device connected (run: connect <port>)');
         }
-        const retrySwipeCmd = `adb ${adbTarget} shell input touchscreen swipe ${rx1} ${ry1} ${rx2} ${ry2} ${dur}`;
-        const retryRemoveCmd = `adb ${adbTarget} shell "input motionevent UP ${rx2} ${ry2} >/dev/null 2>&1; input motionevent CANCEL 0 0 >/dev/null 2>&1"`;
+        const retrySwipeCmd = `adb ${adbTarget} shell input swipe ${rx1} ${ry1} ${rx2} ${ry2} ${dur}`;
         const { stdout } = await execPromise(retrySwipeCmd);
-        await execPromise(retryRemoveCmd).catch(() => {});
         this.lastTapFinishedAt = Date.now();
         return {
           success: true,
