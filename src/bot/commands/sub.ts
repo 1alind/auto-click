@@ -156,22 +156,27 @@ async function createWhiteTextBuffer(
 
 function matchesSonobuoyText(lineText: string, option: SubOption): boolean {
   const clean = lineText.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const hasSonobuoyKeyword =
-    clean.includes('sonobuoy') ||
-    clean.includes('sonob') ||
-    clean.includes('armada') ||
-    clean.includes('detection');
-
-  if (!hasSonobuoyKeyword) return false;
 
   if (option === 'normal') {
-    if (clean.includes('special')) return false;
-    return clean.includes('normal') || clean.includes('sonobuoy') || clean.includes('detection');
+    if (clean.includes('special') || clean.includes('elite') || clean.includes('royal')) return false;
+    const hasSonobuoy =
+      clean.includes('sonobuoy') || clean.includes('sonob') || clean.includes('armada') || clean.includes('detection');
+    return hasSonobuoy && (clean.includes('normal') || clean.includes('norma'));
   }
 
-  // 'red' and 'gold' -> "Armada Detection Sonobuoy (Special)"
-  if (clean.includes('normal')) return false;
-  return clean.includes('special') || clean.includes('sonobuoy') || clean.includes('detection');
+  if (option === 'red') {
+    if (clean.includes('normal') || clean.includes('elite') || clean.includes('royal')) return false;
+    const hasSonobuoy =
+      clean.includes('sonobuoy') || clean.includes('sonob') || clean.includes('armada') || clean.includes('detection');
+    return hasSonobuoy && (clean.includes('special') || clean.includes('specia'));
+  }
+
+  if (option === 'gold') {
+    if (clean.includes('normal') || clean.includes('special')) return false;
+    return clean.includes('eliteroyal') || (clean.includes('elite') && clean.includes('royal'));
+  }
+
+  return false;
 }
 
 async function findSonobuoyTargetOnScreen(
@@ -190,20 +195,8 @@ async function findSonobuoyTargetOnScreen(
   const candidates = allLines.filter((l) => matchesSonobuoyText(l.text, option));
   if (candidates.length === 0) return null;
 
-  if (option === 'normal') {
-    const exactNormal = candidates.find((c) => c.text.toLowerCase().includes('normal'));
-    return exactNormal || candidates[0];
-  }
-
-  const exactSpecial = candidates.filter((c) => c.text.toLowerCase().includes('special'));
-  const list = exactSpecial.length > 0 ? exactSpecial : candidates;
-
-  // If both Special rows are on screen, sort top-to-bottom
-  list.sort((a, b) => a.y0 - b.y0);
-  if (option === 'gold' && list.length >= 2) {
-    return list[1];
-  }
-  return list[0];
+  candidates.sort((a, b) => a.y0 - b.y0);
+  return candidates[0];
 }
 
 export const subCommand: CommandDefinition = {
@@ -248,7 +241,9 @@ export const subCommand: CommandDefinition = {
     const targetLabel =
       option === 'normal'
         ? 'Armada Detection Sonobuoy (Normal)'
-        : `Armada Detection Sonobuoy (Special) : ${option}`;
+        : option === 'red'
+        ? 'Armada Detection Sonobuoy (Special)'
+        : 'Armada Detection Sonobuoy (Elite Royal)';
 
     let statusMsgId: string | null = null;
     const updateStatus = async (text: string) => {
