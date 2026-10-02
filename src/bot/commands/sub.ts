@@ -178,10 +178,11 @@ async function findSonobuoyTargetOnScreen(
   rawScreen: { data: Buffer; width: number; height: number },
   option: SubOption
 ): Promise<OcrLineResult | null> {
-  const roiX = 40;
-  const roiY = Math.floor(rawScreen.height * 0.14);
-  const roiW = rawScreen.width - 80;
-  const roiH = Math.floor(rawScreen.height * 0.78);
+  // Search strictly inside X: 286-992, Y: 726-1723
+  const roiX = 286;
+  const roiY = 726;
+  const roiW = 992 - 286;
+  const roiH = 1723 - 726;
 
   const whiteLayerBuf = await createWhiteTextBuffer(rawScreen, roiX, roiY, roiW, roiH);
   const { lines: allLines } = await recognizeLinesWithTimeout(whiteLayerBuf, roiX, roiY, 1, 6000);
@@ -392,14 +393,14 @@ export const subCommand: CommandDefinition = {
         }
 
         if (subStopRequested) break;
-        const tap3 = await adb.tapRandomRange(
-          Math.max(0, matchedLine.x0),
-          Math.max(matchedLine.x0 + 10, matchedLine.x1),
-          Math.max(0, matchedLine.y0),
-          Math.max(matchedLine.y0 + 10, matchedLine.y1)
-        );
+        const textMinX = Math.max(286, matchedLine.x0 + 10);
+        const textMaxX = Math.max(textMinX + 40, Math.min(992, matchedLine.x1 - 10));
+        const textMinY = Math.max(726, matchedLine.y0 + 2);
+        const textMaxY = Math.max(textMinY + 8, Math.min(1723, matchedLine.y1 - 2));
+
+        const tap3 = await adb.tapRandomRange(textMinX, textMaxX, textMinY, textMaxY);
         ctx.log(
-          `✅ [${cyclePrefix}] Step 3: Found "${matchedLine.text}" & clicked (${tap3.x}, ${tap3.y})`,
+          `✅ [${cyclePrefix}] Step 3: Found "${matchedLine.text}" (${textMinX}-${textMaxX} ${textMinY}-${textMaxY}) & clicked text at (${tap3.x}, ${tap3.y})`,
           'info'
         );
         stepsLog.push({
