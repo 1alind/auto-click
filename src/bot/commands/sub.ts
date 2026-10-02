@@ -477,24 +477,24 @@ export const subCommand: CommandDefinition = {
         if (!(await interruptibleSleep(500))) break;
 
         // =========================================================================
-        // STEP 5: Swipe from top to bottom inside 428-595 1253-1783
+        // STEP 5: Scroll down (swipe from bottom to top) inside 428-595 1253-1783
         // =========================================================================
-        await updateStatus(`${cyclePrefix}: step 5/12 (swiping top-to-bottom in 428-595 1253-1783)...`);
+        await updateStatus(`${cyclePrefix}: step 5/12 (scrolling down in 428-595 1253-1783)...`);
 
         if (subStopRequested) break;
         const swipeX1 = Math.floor(428 + Math.random() * (595 - 428 + 1));
-        const swipeY1 = Math.floor(1253 + Math.random() * 25);
+        const swipeY1 = Math.floor(1758 + Math.random() * (1783 - 1758 + 1)); // start near bottom (1758..1783)
         const swipeX2 = Math.floor(428 + Math.random() * (595 - 428 + 1));
-        const swipeY2 = Math.floor(1758 + Math.random() * (1783 - 1758 + 1));
+        const swipeY2 = Math.floor(1253 + Math.random() * 25); // end near top (1253..1278)
 
         await adb.swipe(swipeX1, swipeY1, swipeX2, swipeY2, 350);
         ctx.log(
-          `✅ [${cyclePrefix}] Step 5: Swiped top-to-bottom (${swipeX1}, ${swipeY1}) -> (${swipeX2}, ${swipeY2}) in 428-595 1253-1783`,
+          `✅ [${cyclePrefix}] Step 5: Scrolled down (${swipeX1}, ${swipeY1}) -> (${swipeX2}, ${swipeY2}) in 428-595 1253-1783`,
           'info'
         );
         stepsLog.push({
           step: 5,
-          title: 'Swipe Top-to-Bottom (428-595 1253-1783)',
+          title: 'Scroll Down (428-595 1253-1783)',
           description: `Swiped (${swipeX1}, ${swipeY1}) -> (${swipeX2}, ${swipeY2})`,
           timestamp: Date.now(),
           status: 'completed'
