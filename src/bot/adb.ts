@@ -463,6 +463,112 @@ export class AdbController {
   }
 
   /**
+   * Swipes from (x1, y1) to (x2, y2) over durationMs via standard ADB shell.
+   * Serialized through tapChain and cleans up any lingering touch state after completion.
+   */
+  public async swipe(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    durationMs = 300
+  ): Promise<{ success: boolean; command: string; output: string }> {
+    const runSwipe = async () => {
+      const rx1 = Math.round(x1);
+      const ry1 = Math.round(y1);
+      const rx2 = Math.round(x2);
+      const ry2 = Math.round(y2);
+      const dur = Math.max(80, Math.round(durationMs));
+
+      const isAdb = await this.isAdbAvailable();
+      if (!isAdb) {
+        throw new Error('ADB is not available. Connect a real Android device.');
+      }
+
+      const elapsedSinceLastTap = Date.now() - this.lastTapFinishedAt;
+      if (elapsedSinceLastTap < 120) {
+        await new Promise((r) => setTimeout(r, 120 - elapsedSinceLastTap));
+      }
+
+      let adbTarget = await this.resolveTargetFlag();
+      const swipeCmd = `adb ${adbTarget} shell input touchscreen swipe ${rx1} ${ry1} ${rx2} ${ry2} ${dur}`;
+      const removeAllCmd = `adb ${adbTarget} shell "input motionevent UP ${rx2} ${ry2} >/dev/null 2>&1; input motionevent CANCEL 0 0 >/dev/null 2>&1"`;
+
+      try {
+        const { stdout } = await execPromise(swipeCmd);
+        await execPromise(removeAllCmd).catch(() => {});
+        this.lastTapFinishedAt = Date.now();
+        return {
+          success: true,
+          command: swipeCmd,
+          output: stdout.trim()
+        };
+      } catch {
+        await execPromise(removeAllCmd).catch(() => {});
+        adbTarget = await this.resolveTargetFlag(true);
+        if (!adbTarget) {
+          throw new Error('no adb device connected (run: connect <port>)');
+        }
+        const retrySwipeCmd = `adb ${adbTarget} shell input touchscreen swipe ${rx1} ${ry1} ${rx2} ${ry2} ${dur}`;
+        const retryRemoveCmd = `adb ${adbTarget} shell "input motionevent UP ${rx2} ${ry2} >/dev/null 2>&1; input motionevent CANCEL 0 0 >/dev/null 2>&1"`;
+        const { stdout } = await execPromise(retrySwipeCmd);
+        await execPromise(retryRemoveCmd).catch(() => {});
+        this.lastTapFinishedAt = Date.now();
+        return {
+          success: true,
+          command: retrySwipeCmd,
+          output: stdout.trim()
+        };
+      }
+    };
+
+    const next = this.tapChain.then(runSwipe, runSwipe);
+    this.tapChain = next.catch(() => {});
+    return next;
+  }
+
+  /**
+   * Sends an Android keyevent (e.g., 4 = BACK, 3 = HOME, 187 = APP_SWITCH).
+   */
+  public async keyEvent(keyCode: number | string): Promise<{ success: boolean; output: string }> {
+    const isAdb = await this.isAdbAvailable();
+    if (!isAdb) {
+      throw new Error('ADB is not available.');
+    }
+    let adbTarget = await this.resolveTargetFlag();
+    try {
+      const { stdout } = await execPromise(`adb ${adbTarget} shell input keyevent ${keyCode}`);
+      return { success: true, output: stdout.trim() };
+    } catch {
+      adbTarget = await this.resolveTargetFlag(true);
+      const { stdout } = await execPromise(`adb ${adbTarget} shell input keyevent ${keyCode}`);
+      return { success: true, output: stdout.trim() };
+    }
+  }
+
+  /**
+   * Inputs text via ADB shell input text.
+   */
+  public async inputText(text: string): Promise<{ success: boolean; output: string }> {
+    const isAdb = await this.isAdbAvailable();
+    if (!isAdb) {
+      throw new Error('ADB is not available.');
+    }
+    const escaped = String(text)
+      .replace(/ /g, '%s')
+      .replace(/["'`$\\;&|<>(){}[\]!#*?~]/g, '\\$&');
+    let adbTarget = await this.resolveTargetFlag();
+    try {
+      const { stdout } = await execPromise(`adb ${adbTarget} shell input text "${escaped}"`);
+      return { success: true, output: stdout.trim() };
+    } catch {
+      adbTarget = await this.resolveTargetFlag(true);
+      const { stdout } = await execPromise(`adb ${adbTarget} shell input text "${escaped}"`);
+      return { success: true, output: stdout.trim() };
+    }
+  }
+
+  /**
    * Captures a fresh screen buffer using a unique Date.now() temp file in os.tmpdir()
    * and deletes it immediately after reading.
    */

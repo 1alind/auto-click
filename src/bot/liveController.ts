@@ -294,10 +294,16 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
       } catch {}
     }
 
+    let webCodecsDecoder = null;
+
     function stopH264Stream() {
       if (h264Abort) {
         try { h264Abort.abort(); } catch {}
         h264Abort = null;
+      }
+      if (webCodecsDecoder) {
+        try { webCodecsDecoder.close(); } catch {}
+        webCodecsDecoder = null;
       }
       if (jmuxer) {
         try { jmuxer.destroy(); } catch {}
@@ -308,13 +314,38 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
       imgEl.style.display = 'block';
     }
 
+    // Helper: splits a byte buffer into complete H.264 Annex-B NAL units (starting with 00 00 00 01)
+    function extractCompleteNals(buffer) {
+      const starts = [];
+      for (let i = 0; i <= buffer.length - 4; i++) {
+        if (buffer[i] === 0 && buffer[i + 1] === 0 && buffer[i + 2] === 0 && buffer[i + 3] === 1) {
+          starts.push(i);
+          i += 3;
+        }
+      }
+      if (starts.length <= 1) {
+        return { nals: [], remainder: buffer };
+      }
+      const nals = [];
+      for (let k = 0; k < starts.length - 1; k++) {
+        nals.push(buffer.subarray(starts[k], starts[k + 1]));
+      }
+      const lastStart = starts[starts.length - 1];
+      return {
+        nals,
+        completeBytes: buffer.subarray(0, lastStart),
+        remainder: buffer.subarray(lastStart)
+      };
+    }
+
     async function startH264Stream() {
       stopH264Stream();
+      const canUseWebCodecs = typeof window.VideoDecoder !== 'undefined';
       const canUseMse = typeof JMuxer !== 'undefined' && (window.MediaSource || window.ManagedMediaSource);
       if (!streaming || quality !== 'h264') {
         return;
       }
-      if (!canUseMse) {
+      if (!canUseWebCodecs && !canUseMse) {
         quality = 'low';
         document.getElementById('selQuality').value = 'low';
         fetchFrame(true);
@@ -325,32 +356,44 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
       fetchFrame(true);
 
       try {
-        jmuxer = new JMuxer({
-          node: 'liveVideo',
-          mode: 'video',
-          flushingTime: 1,
-          maxDelay: 10,
-          clearBuffer: true,
-          fps: 30,
-          debug: false
-        });
+        let useWebCodecs = canUseWebCodecs;
+        let spsNal = null;
+        let ppsNal = null;
+        let decoderConfigured = false;
+        let timestampUs = 0;
 
-        // Keep <video> locked to the live edge with zero buffer lag!
-        videoEl.ontimeupdate = () => {
-          try {
-            if (videoEl.buffered && videoEl.buffered.length > 0) {
-              const end = videoEl.buffered.end(videoEl.buffered.length - 1);
-              const lag = end - videoEl.currentTime;
-              if (lag > 0.25) {
-                videoEl.currentTime = end - 0.01;
-              } else if (lag > 0.08) {
-                videoEl.playbackRate = 1.35;
-              } else {
-                videoEl.playbackRate = 1.0;
+        if (useWebCodecs) {
+          webCodecsDecoder = new VideoDecoder({
+            output: (frame) => {
+              if (quality === 'h264' && streaming) {
+                if (liveCanvas.width !== frame.displayWidth || liveCanvas.height !== frame.displayHeight) {
+                  liveCanvas.width = frame.displayWidth;
+                  liveCanvas.height = frame.displayHeight;
+                }
+                if (liveCanvas.style.display === 'none') {
+                  liveCanvas.style.display = 'block';
+                  videoEl.style.display = 'none';
+                  imgEl.style.display = 'none';
+                }
+                liveCtx.drawImage(frame, 0, 0);
               }
+              frame.close();
+            },
+            error: () => {
+              useWebCodecs = false;
             }
-          } catch {}
-        };
+          });
+        }
+
+        if (canUseMse) {
+          jmuxer = new JMuxer({
+            node: 'liveVideo',
+            mode: 'video',
+            flushingTime: 0,
+            clearBuffer: true,
+            debug: false
+          });
+        }
 
         h264Abort = new AbortController();
         const res = await fetch('/api/live/h264-stream?t=' + Date.now(), {
@@ -359,22 +402,82 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
         if (!res.ok || !res.body) return;
 
         const reader = res.body.getReader();
-        let gotFirstChunk = false;
+        let pending = new Uint8Array(0);
+        let lastFeedAt = Date.now();
+        let gotFirstVideo = false;
+
         while (streaming && quality === 'h264') {
           const { done, value } = await reader.read();
           if (done) break;
-          if (value && value.byteLength > 0 && jmuxer) {
-            if (!gotFirstChunk) {
-              gotFirstChunk = true;
+          if (!value || value.byteLength === 0) continue;
+
+          const merged = new Uint8Array(pending.length + value.length);
+          merged.set(pending, 0);
+          merged.set(value, pending.length);
+
+          const parsed = extractCompleteNals(merged);
+          pending = parsed.remainder;
+          if (parsed.nals.length === 0) continue;
+
+          if (useWebCodecs && webCodecsDecoder && webCodecsDecoder.state !== 'closed') {
+            for (const nal of parsed.nals) {
+              const nalType = nal[4] & 0x1f;
+              if (nalType === 7) {
+                spsNal = nal;
+              } else if (nalType === 8) {
+                ppsNal = nal;
+              }
+              if (!decoderConfigured && spsNal && spsNal.length >= 8) {
+                const profileHex =
+                  spsNal[5].toString(16).padStart(2, '0') +
+                  spsNal[6].toString(16).padStart(2, '0') +
+                  spsNal[7].toString(16).padStart(2, '0');
+                try {
+                  webCodecsDecoder.configure({
+                    codec: 'avc1.' + profileHex,
+                    optimizeForLatency: true
+                  });
+                  decoderConfigured = true;
+                } catch {
+                  useWebCodecs = false;
+                  break;
+                }
+              }
+              if (decoderConfigured && (nalType === 5 || nalType === 1)) {
+                let dataToFeed = nal;
+                if (nalType === 5 && spsNal && ppsNal) {
+                  dataToFeed = new Uint8Array(spsNal.length + ppsNal.length + nal.length);
+                  dataToFeed.set(spsNal, 0);
+                  dataToFeed.set(ppsNal, spsNal.length);
+                  dataToFeed.set(nal, spsNal.length + ppsNal.length);
+                }
+                try {
+                  webCodecsDecoder.decode(
+                    new EncodedVideoChunk({
+                      type: nalType === 5 ? 'key' : 'delta',
+                      timestamp: (timestampUs += 16666),
+                      data: dataToFeed
+                    })
+                  );
+                } catch {}
+              }
+            }
+          } else if (jmuxer && parsed.completeBytes) {
+            const now = Date.now();
+            const deltaMs = Math.max(16, Math.min(200, now - lastFeedAt));
+            lastFeedAt = now;
+            if (!gotFirstVideo) {
+              gotFirstVideo = true;
               videoEl.style.display = 'block';
+              liveCanvas.style.display = 'none';
               imgEl.style.display = 'none';
               videoEl.play().catch(() => {});
             }
-            jmuxer.feed({ video: value });
+            jmuxer.feed({ video: parsed.completeBytes, duration: deltaMs });
             try {
               if (videoEl.buffered && videoEl.buffered.length > 0) {
                 const end = videoEl.buffered.end(videoEl.buffered.length - 1);
-                if (end - videoEl.currentTime > 0.2) {
+                if (end - videoEl.currentTime > 0.12) {
                   videoEl.currentTime = end - 0.01;
                 }
               }
@@ -410,7 +513,12 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
     }
 
     function toPhone(clientX, clientY) {
-      const activeEl = videoEl.style.display !== 'none' ? videoEl : imgEl;
+      const activeEl =
+        liveCanvas.style.display !== 'none'
+          ? liveCanvas
+          : videoEl.style.display !== 'none'
+          ? videoEl
+          : imgEl;
       const rect = activeEl.getBoundingClientRect();
       if (!rect.width || !rect.height) return null;
       const rx = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
