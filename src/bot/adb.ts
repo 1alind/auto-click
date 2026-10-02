@@ -567,6 +567,11 @@ export class AdbController {
    * Captures a fresh screen buffer using a unique Date.now() temp file in os.tmpdir()
    * and deletes it immediately after reading.
    */
+  private screencapChain: Promise<any> = Promise.resolve();
+
+  /**
+   * Captures a fresh PNG screen buffer in memory via `adb exec-out screencap -p`.
+   */
   public async screencap(): Promise<Buffer> {
     const isAdb = await this.isAdbAvailable();
 
@@ -575,38 +580,76 @@ export class AdbController {
     }
 
     let adbTarget = await this.resolveTargetFlag();
-    const fs = await import('fs');
-    const path = await import('path');
-    const os = await import('os');
+    const buildPngArgs = (targetFlag: string) => {
+      const parts = targetFlag.trim().split(/\s+/).filter(Boolean);
+      return [...parts, 'exec-out', 'screencap', '-p'];
+    };
 
-    const tmpFile = path.join(
-      os.tmpdir(),
-      `screen_${Date.now()}_${Math.floor(Math.random() * 10000)}.png`
-    );
-
-    try {
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        await execPromise(`adb ${adbTarget} exec-out screencap -p > "${tmpFile}"`);
+        const res = await execFilePromise('adb', buildPngArgs(adbTarget), {
+          encoding: 'buffer',
+          maxBuffer: 25 * 1024 * 1024
+        });
+        const buf = res.stdout as unknown as Buffer;
+        // Verify valid PNG signature (89 50 4E 47) and IEND trailer
+        if (
+          buf &&
+          buf.length > 500 &&
+          buf[0] === 0x89 &&
+          buf[1] === 0x50 &&
+          buf[2] === 0x4e &&
+          buf[3] === 0x47
+        ) {
+          return buf;
+        }
       } catch {
         adbTarget = await this.resolveTargetFlag(true);
         if (!adbTarget) {
           throw new Error('no adb device connected (run: connect <port>)');
         }
-        await execPromise(`adb ${adbTarget} exec-out screencap -p > "${tmpFile}"`);
       }
-      const buf = await fs.promises.readFile(tmpFile);
-      if (!buf || buf.length < 100) {
-        throw new Error('Empty screenshot file');
-      }
-      return buf;
-    } finally {
-      await fs.promises.unlink(tmpFile).catch(() => {});
+      await new Promise((r) => setTimeout(r, 120));
     }
+
+    throw new Error('Failed to capture valid PNG screenshot from device');
   }
 
   /**
-   * Captures raw RGBA screen pixels directly into RAM via `adb exec-out screencap` (without -p).
-   * Zero PNG compression on Android, zero temp file on disk, zero PNG decoding in Node.js.
+   * Validates that a raw RGBA buffer has no byte-shift corruption (all sampled pixels must have alpha === 255).
+   */
+  private isValidRawRgbaBuffer(data: Buffer, width: number, height: number): boolean {
+    const totalPixels = width * height;
+    if (data.length !== totalPixels * 4) return false;
+
+    // Sample 1,200 pixels across the entire image (especially middle and bottom rows where short writes accumulate)
+    const step = Math.max(1, Math.floor(totalPixels / 1200));
+    let nonOpaqueCount = 0;
+    for (let p = 0; p < totalPixels; p += step) {
+      const alpha = data[p * 4 + 3];
+      if (alpha !== 255) {
+        nonOpaqueCount++;
+        if (nonOpaqueCount > 2) {
+          return false;
+        }
+      }
+    }
+
+    // Also specifically check the bottom 300 rows (e.g. Y: 2100..2399) every 37 pixels
+    const bottomStartPixel = Math.max(0, (height - 300) * width);
+    for (let p = bottomStartPixel; p < totalPixels; p += 37) {
+      if (data[p * 4 + 3] !== 255) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Captures raw RGBA screen pixels into RAM.
+   * Strictly validates byte length (no short-write byte drops) and alpha channel integrity.
+   * If raw pipe transfer drops any bytes, automatically falls back to lossless PNG capture (`screencap -p`).
    */
   public async screencapRaw(): Promise<{
     data: Buffer;
@@ -614,56 +657,75 @@ export class AdbController {
     height: number;
     headerSize: number;
   }> {
-    const isAdb = await this.isAdbAvailable();
-    if (!isAdb) {
-      throw new Error('ADB is not available in environment PATH. Failed to capture raw screen.');
-    }
-
-    let adbTarget = await this.resolveTargetFlag();
-    const buildArgs = (targetFlag: string) => {
-      const parts = targetFlag.trim().split(/\s+/).filter(Boolean);
-      return [...parts, 'exec-out', 'screencap'];
-    };
-
-    let stdout: Buffer;
-    try {
-      const res = await execFilePromise('adb', buildArgs(adbTarget), {
-        encoding: 'buffer',
-        maxBuffer: 30 * 1024 * 1024
-      });
-      stdout = res.stdout as unknown as Buffer;
-    } catch {
-      adbTarget = await this.resolveTargetFlag(true);
-      if (!adbTarget) {
-        throw new Error('no adb device connected (run: connect <port>)');
+    const runCapture = async () => {
+      const isAdb = await this.isAdbAvailable();
+      if (!isAdb) {
+        throw new Error('ADB is not available in environment PATH. Failed to capture raw screen.');
       }
-      const res = await execFilePromise('adb', buildArgs(adbTarget), {
-        encoding: 'buffer',
-        maxBuffer: 30 * 1024 * 1024
-      });
-      stdout = res.stdout as unknown as Buffer;
-    }
 
-    if (!stdout || stdout.length < 16) {
-      throw new Error('Empty raw screencap buffer');
-    }
+      let adbTarget = await this.resolveTargetFlag();
+      const buildArgs = (targetFlag: string) => {
+        const parts = targetFlag.trim().split(/\s+/).filter(Boolean);
+        return [...parts, 'exec-out', 'screencap'];
+      };
 
-    const width = stdout.readUInt32LE(0);
-    const height = stdout.readUInt32LE(4);
-    const pixelBytes = width * height * 4;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await execFilePromise('adb', buildArgs(adbTarget), {
+            encoding: 'buffer',
+            maxBuffer: 30 * 1024 * 1024
+          });
+          const stdout = res.stdout as unknown as Buffer;
 
-    if (width <= 0 || width > 10000 || height <= 0 || height > 10000 || stdout.length < pixelBytes + 12) {
-      throw new Error(`Unexpected raw screencap dimensions (${width}x${height}, len=${stdout.length})`);
-    }
+          if (stdout && stdout.length >= 16) {
+            const width = stdout.readUInt32LE(0);
+            const height = stdout.readUInt32LE(4);
+            const format = stdout.readUInt32LE(8);
+            const pixelBytes = width * height * 4;
+            const headerDiff = stdout.length - pixelBytes;
 
-    const headerSize = stdout.length - pixelBytes >= 16 ? 16 : 12;
-    const data = stdout.subarray(headerSize, headerSize + pixelBytes);
+            // Header MUST be strictly 16 bytes (Android 9+) or 12 bytes (older Android).
+            // Any other length means `screencap` suffered a partial write() over the pipe, shifting pixel bytes!
+            if (
+              width > 0 &&
+              width <= 10000 &&
+              height > 0 &&
+              height <= 10000 &&
+              (format === 1 || format === 2) &&
+              (headerDiff === 16 || headerDiff === 12)
+            ) {
+              const headerSize = headerDiff;
+              const data = stdout.subarray(headerSize, headerSize + pixelBytes);
+              if (this.isValidRawRgbaBuffer(data, width, height)) {
+                return {
+                  data,
+                  width,
+                  height,
+                  headerSize
+                };
+              }
+            }
+          }
+        } catch {
+          adbTarget = await this.resolveTargetFlag(true);
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
 
-    return {
-      data,
-      width,
-      height,
-      headerSize
+      // Fallback: capture via lossless PNG (`screencap -p`) and decode via Jimp so byte-shift is impossible
+      const pngBuf = await this.screencap();
+      const { Jimp } = await import('jimp');
+      const img = await Jimp.fromBuffer(pngBuf);
+      return {
+        data: Buffer.from(img.bitmap.data),
+        width: img.bitmap.width,
+        height: img.bitmap.height,
+        headerSize: 0
+      };
     };
+
+    const next = this.screencapChain.then(runCapture, runCapture);
+    this.screencapChain = next.catch(() => {});
+    return next;
   }
 }

@@ -280,15 +280,25 @@ export const subCommand: CommandDefinition = {
         }
 
         const step1Region = { minX: 420, maxX: 489, minY: 2225, maxY: 2281 };
-        const rawScreen1 = await adb.screencapRaw();
+        let rawScreen1 = await adb.screencapRaw();
         const screenW = rawScreen1.width || 1080;
         const screenH = rawScreen1.height || 2400;
 
-        const invMatch = await TemplateMatcher.matchRaw(rawScreen1, invPath, {
+        let invMatch = await TemplateMatcher.matchRaw(rawScreen1, invPath, {
           scales: [0.7, 0.85, 1.0, 1.15, 1.3],
           threshold,
           region: step1Region
         });
+
+        for (let retry = 0; retry < 2 && !invMatch.found; retry++) {
+          if (!(await interruptibleSleep(500))) break;
+          rawScreen1 = await adb.screencapRaw();
+          invMatch = await TemplateMatcher.matchRaw(rawScreen1, invPath, {
+            scales: [0.7, 0.85, 1.0, 1.15, 1.3],
+            threshold,
+            region: step1Region
+          });
+        }
 
         if (!invMatch.found) {
           const errMsg = `❌ ${cyclePrefix} step 1 failed: \`inventory.png\` not found in 420-489 2225-2281 (${(invMatch.score * 100).toFixed(1)}%)`;
@@ -376,8 +386,14 @@ export const subCommand: CommandDefinition = {
         // =========================================================================
         await updateStatus(`${cyclePrefix}: step 3/12 (searching for "${targetLabel}")...`);
 
-        const rawScreen3 = await adb.screencapRaw();
-        const matchedLine = await findSonobuoyTargetOnScreen(rawScreen3, option);
+        let rawScreen3 = await adb.screencapRaw();
+        let matchedLine = await findSonobuoyTargetOnScreen(rawScreen3, option);
+
+        for (let retry = 0; retry < 2 && !matchedLine; retry++) {
+          if (!(await interruptibleSleep(500))) break;
+          rawScreen3 = await adb.screencapRaw();
+          matchedLine = await findSonobuoyTargetOnScreen(rawScreen3, option);
+        }
 
         if (!matchedLine) {
           const errMsg = `❌ ${cyclePrefix} step 3 failed: text "${targetLabel}" not found on screen`;
@@ -577,26 +593,26 @@ export const subCommand: CommandDefinition = {
         if (!(await interruptibleSleep(500))) break;
 
         // =========================================================================
-        // STEP 10: Click 150x150 px in middle of screen
+        // STEP 10: Click 50x50 px in middle of screen
         // =========================================================================
         const centerX = Math.floor(screenW / 2);
         const centerY = Math.floor(screenH / 2);
-        const midMinX = centerX - 75;
-        const midMaxX = centerX + 75;
-        const midMinY = centerY - 75;
-        const midMaxY = centerY + 75;
+        const midMinX = centerX - 25;
+        const midMaxX = centerX + 25;
+        const midMinY = centerY - 25;
+        const midMaxY = centerY + 25;
 
-        await updateStatus(`${cyclePrefix}: step 10/12 (clicking 150x150 center ${midMinX}-${midMaxX} ${midMinY}-${midMaxY})...`);
+        await updateStatus(`${cyclePrefix}: step 10/12 (clicking 50x50 center ${midMinX}-${midMaxX} ${midMinY}-${midMaxY})...`);
 
         if (subStopRequested) break;
         const tap10 = await adb.tapRandomRange(midMinX, midMaxX, midMinY, midMaxY);
         ctx.log(
-          `✅ [${cyclePrefix}] Step 10: Clicked 150x150 center (${tap10.x}, ${tap10.y}) in ${midMinX}-${midMaxX} ${midMinY}-${midMaxY}`,
+          `✅ [${cyclePrefix}] Step 10: Clicked 50x50 center (${tap10.x}, ${tap10.y}) in ${midMinX}-${midMaxX} ${midMinY}-${midMaxY}`,
           'info'
         );
         stepsLog.push({
           step: 10,
-          title: `Tap 150x150 Center (${midMinX}-${midMaxX} ${midMinY}-${midMaxY})`,
+          title: `Tap 50x50 Center (${midMinX}-${midMaxX} ${midMinY}-${midMaxY})`,
           description: `Tapped (${tap10.x}, ${tap10.y})`,
           timestamp: Date.now(),
           status: 'completed'
