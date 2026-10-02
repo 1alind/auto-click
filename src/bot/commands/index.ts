@@ -257,6 +257,7 @@ export const statusCommand: CommandDefinition = {
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
     const { botManager } = await import('../botManager');
     const { MacroManager } = await import('../macroManager');
+    const { getRunningSubOption } = await import('./sub');
     const status = await botManager.getStatus();
 
     const onlineDevice = status.devices.find((d) => d.state === 'device');
@@ -269,10 +270,13 @@ export const statusCommand: CommandDefinition = {
 
     const runningMacro = MacroManager.getRunningMacro();
     const isFindRunning = MacroManager.isFindRunning();
+    const runningSub = getRunningSubOption();
     const startState = MacroManager.loadStartState();
 
     const taskText = isFindRunning
       ? 'running `find`'
+      : runningSub
+      ? `running \`sub ${runningSub}\``
       : runningMacro
       ? runningMacro.toLowerCase() === 'start'
         ? `running \`start\` (step ${startState.currentStep}, cycle #${startState.cycleCount})`
@@ -771,9 +775,12 @@ export const stopCommand: CommandDefinition = {
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
     const { MacroManager } = await import('../macroManager');
     const { botManager } = await import('../botManager');
+    const { stopSub, getRunningSubOption } = await import('./sub');
     const adb = botManager.getAdbController();
 
     const stoppedAutoConnect = adb.stopAutoConnect();
+    const subOpt = getRunningSubOption();
+    const stoppedSub = stopSub();
 
     if (MacroManager.isFindRunning()) {
       await MacroManager.waitForFind();
@@ -786,6 +793,12 @@ export const stopCommand: CommandDefinition = {
       const msg = stoppedAutoConnect
         ? `stopped adb auto-connect & stopping ${runningName} right ${stopTargetDesc}...`
         : `stopping ${runningName} right ${stopTargetDesc}...`;
+      if (ctx.reply) await ctx.reply(msg);
+      return { success: true, message: msg };
+    }
+
+    if (stoppedSub) {
+      const msg = `stopping \`sub ${subOpt}\`...`;
       if (ctx.reply) await ctx.reply(msg);
       return { success: true, message: msg };
     }
@@ -1158,6 +1171,15 @@ export const liveCommand: CommandDefinition = {
 };
 
 const COMMAND_MANUALS: Record<string, string> = {
+  sub: [
+    '**sub** — Automated 12-step Sonobuoy sequence (repeats every 60s until `stop`)',
+    'usage:',
+    '• `sub normal` — uses `Armada Detection Sonobuoy (Normal)`',
+    '• `sub red` — uses `Armada Detection Sonobuoy (Special)` (red)',
+    '• `sub gold` — uses `Armada Detection Sonobuoy (Special)` (gold)',
+    '• `sub stop` (or `stop`) — stops the running `sub` loop'
+  ].join('\n'),
+
   live: [
     '**live** — Stop all local scripts & start on-demand Live Browser Control on port 4444',
     'usage:',

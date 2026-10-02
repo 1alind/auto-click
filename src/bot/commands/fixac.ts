@@ -41,7 +41,7 @@ export interface OcrLineResult {
   y1: number;
 }
 
-async function recognizeLinesWithTimeout(
+export async function recognizeLinesWithTimeout(
   imageBuffer: Buffer,
   offsetX = 0,
   offsetY = 0,

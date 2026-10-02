@@ -7,6 +7,7 @@ import { WebhookService } from './webhook';
 import { DiscordBotClient } from './discordBot';
 import { findCommand } from './commands/find';
 import { fixacCommand, textsCommand } from './commands/fixac';
+import { subCommand } from './commands/sub';
 import {
   tapCommand,
   screenshotCommand,
@@ -149,6 +150,7 @@ export class BotManager {
     this.discord.registerCommand(findCommand);
     this.discord.registerCommand(fixacCommand);
     this.discord.registerCommand(textsCommand);
+    this.discord.registerCommand(subCommand);
     this.discord.registerCommand(tapCommand);
     this.discord.registerCommand(screenshotCommand);
     this.discord.registerCommand(devicesCommand);

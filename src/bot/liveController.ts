@@ -1180,6 +1180,12 @@ export class LiveController {
   }
 
   public static async stopAllLocalScriptsForLive(logFn?: (msg: string) => void): Promise<string | null> {
+    const { stopSub, getRunningSubOption } = await import('./commands/sub');
+    const subOpt = getRunningSubOption();
+    if (subOpt) {
+      logFn?.(`🛑 Stopping running "sub ${subOpt}" before starting Live Control...`);
+      stopSub();
+    }
     if (MacroManager.isFindRunning()) {
       logFn?.('⏳ Waiting for "find" to finish before starting Live Control...');
       await MacroManager.waitForFind();
@@ -1190,7 +1196,7 @@ export class LiveController {
       await MacroManager.stopAllAndWait();
       return running;
     }
-    return null;
+    return subOpt ? `sub ${subOpt}` : null;
   }
 
   private static async startPort4444Server(port = LIVE_PORT, bindHost = '0.0.0.0'): Promise<void> {
