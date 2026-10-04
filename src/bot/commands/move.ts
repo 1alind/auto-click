@@ -169,7 +169,7 @@ export const moveCommand: CommandDefinition = {
 
     // =========================================================================
     // STEP 6: Check area 460-669 1601-1645 for acd1.png
-    // If YES -> click 526-620 1469-1543
+    // If YES -> click 539-603 1476-1538
     // =========================================================================
     ctx.log('🔍 Step 6: Checking area 460-669 1601-1645 for acd1.png...', 'info');
     rawScreen = await adb.screencapRaw();
@@ -189,9 +189,9 @@ export const moveCommand: CommandDefinition = {
     }
 
     if (acd1Matched) {
-      ctx.log('acd1.png matched -> clicking 526-620 1469-1543...', 'info');
-      const tapAcd1 = await adb.tapRandomRange(526, 620, 1469, 1543);
-      ctx.log(`Tapped (${tapAcd1.x}, ${tapAcd1.y}) in 526-620 1469-1543`, 'info');
+      ctx.log('acd1.png matched -> clicking 539-603 1476-1538...', 'info');
+      const tapAcd1 = await adb.tapRandomRange(539, 603, 1476, 1538);
+      ctx.log(`Tapped (${tapAcd1.x}, ${tapAcd1.y}) in 539-603 1476-1538`, 'info');
       await sleep(500);
     } else {
       ctx.log('acd1.png not matched, continuing...', 'info');
