@@ -535,14 +535,19 @@ export class TemplateMatcher {
     const cropW = region ? Math.max(1, Math.min(region.maxX - cropX, sw - cropX)) : sw;
     const cropH = region ? Math.max(1, Math.min(region.maxY - cropY, sh - cropY)) : sh;
 
-    const croppedData = Buffer.allocUnsafe(cropW * cropH * 4);
+    const croppedData = Buffer.alloc(cropW * cropH * 4);
+    const srcData = rawScreen.data;
     for (let y = 0; y < cropH; y++) {
       const srcRowStart = ((cropY + y) * sw + cropX) * 4;
       const dstRowStart = y * cropW * 4;
-      Buffer.from(rawScreen.data.buffer, rawScreen.data.byteOffset + srcRowStart, cropW * 4).copy(
-        croppedData,
-        dstRowStart
-      );
+      const copyLen = cropW * 4;
+      if (srcRowStart + copyLen <= srcData.length) {
+        if (Buffer.isBuffer(srcData)) {
+          srcData.copy(croppedData, dstRowStart, srcRowStart, srcRowStart + copyLen);
+        } else {
+          croppedData.set(srcData.subarray(srcRowStart, srcRowStart + copyLen), dstRowStart);
+        }
+      }
     }
 
     const jimpCrop = Jimp.fromBitmap({

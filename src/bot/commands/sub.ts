@@ -5,6 +5,7 @@ import { Jimp } from 'jimp';
 import { CommandDefinition, CommandContext, CommandResult, StepLog } from '../types';
 import { TemplateMatcher } from '../matcher';
 import { recognizeLinesWithTimeout, OcrLineResult } from './fixac';
+import { captureCleanErrorScreenshot } from '../macroManager';
 
 export type SubOption = 'normal' | 'red' | 'gold';
 
@@ -307,7 +308,7 @@ export const subCommand: CommandDefinition = {
           const errMsg = `❌ ${cyclePrefix} step 1 failed: \`inventory.png\` not found in 420-489 2225-2281 (${(invMatch.score * 100).toFixed(1)}%)`;
           ctx.log(errMsg, 'error');
           if (webhook.isConfigured()) {
-            const cropBuf = await TemplateMatcher.cropRawToPng(rawScreen1, step1Region);
+            const cropBuf = await captureCleanErrorScreenshot(adb, step1Region, rawScreen1);
             await webhook.send({
               content: errMsg,
               fileBuffer: cropBuf,
@@ -356,7 +357,7 @@ export const subCommand: CommandDefinition = {
           const errMsg = `❌ ${cyclePrefix} step 2 failed: word "Box" not found in 132-271 231-338 (OCR read: "${boxCheck.text || 'none'}")`;
           ctx.log(errMsg, 'error');
           if (webhook.isConfigured()) {
-            const cropBuf = await TemplateMatcher.cropRawToPng(rawScreen2, step2VerifyRegion);
+            const cropBuf = await captureCleanErrorScreenshot(adb, step2VerifyRegion, rawScreen2);
             await webhook.send({
               content: errMsg,
               fileBuffer: cropBuf,
@@ -462,7 +463,7 @@ export const subCommand: CommandDefinition = {
           const errMsg = `❌ ${cyclePrefix} step 4 failed: \`subuse.png\` not found in 596-944 1720-1825 (${(subuseMatch.score * 100).toFixed(1)}%)`;
           ctx.log(errMsg, 'error');
           if (webhook.isConfigured()) {
-            const cropBuf = await TemplateMatcher.cropRawToPng(rawScreen4, step4Region);
+            const cropBuf = await captureCleanErrorScreenshot(adb, step4Region, rawScreen4);
             await webhook.send({
               content: errMsg,
               fileBuffer: cropBuf,

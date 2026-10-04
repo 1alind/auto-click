@@ -69,6 +69,41 @@ export interface StartStateStats {
   updatedAt: string;
 }
 
+export async function captureCleanErrorScreenshot(
+  adb: any,
+  region?: { minX: number; maxX: number; minY: number; maxY: number },
+  rawScreenFallback?: { data: Buffer | Uint8Array; width: number; height: number }
+): Promise<Buffer | undefined> {
+  try {
+    const pngBuf = await adb.screencap().catch(() => null);
+    if (pngBuf && pngBuf.length > 500) {
+      if (region) {
+        const { Jimp } = await import('jimp');
+        const img = await Jimp.read(pngBuf);
+        const w = img.bitmap.width;
+        const h = img.bitmap.height;
+        const cropX = Math.max(0, Math.min(region.minX, w - 1));
+        const cropY = Math.max(0, Math.min(region.minY, h - 1));
+        const cropW = Math.max(1, Math.min(region.maxX - cropX, w - cropX));
+        const cropH = Math.max(1, Math.min(region.maxY - cropY, h - cropY));
+        img.crop({ x: cropX, y: cropY, w: cropW, h: cropH });
+        return await img.getBuffer('image/png');
+      }
+      return pngBuf;
+    }
+  } catch (err: any) {
+    console.warn('[ErrorScreenshot] adb.screencap failed, falling back:', err?.message);
+  }
+
+  if (rawScreenFallback) {
+    try {
+      const { TemplateMatcher } = await import('./matcher');
+      return await TemplateMatcher.cropRawToPng(rawScreenFallback, region);
+    } catch {}
+  }
+  return undefined;
+}
+
 function resolveStartStateFilePath(): string {
   const homeDir = process.env.HOME || os.homedir() || '';
   const candidates = [
@@ -993,7 +1028,7 @@ export class MacroManager {
                   try {
                     const webhook = botManager.getWebhookService();
                     if (webhook.isConfigured()) {
-                      const croppedBuffer = await TemplateMatcher.cropRawToPng(rawScreen, region);
+                      const croppedBuffer = await captureCleanErrorScreenshot(adb, region, rawScreen);
                       await webhook.send({
                         content: errorMsg,
                         fileBuffer: croppedBuffer,
@@ -1023,11 +1058,11 @@ export class MacroManager {
                 const errorMsg = `❌ Image "${targetName}" NOT found in ${macro.name} step ${stepNumber}! Score: ${scorePct.toFixed(1)}% (< ${threshPct.toFixed(0)}%). Stopping macro.`;
                 ctx.log(errorMsg, 'error');
 
-                // Crop the specific region/area from the raw screen buffer to send to Discord
+                // Crop the specific region/area from the screen buffer to send to Discord
                 try {
                   const webhook = botManager.getWebhookService();
                   if (webhook.isConfigured()) {
-                    const croppedBuffer = await TemplateMatcher.cropRawToPng(rawScreen, region);
+                    const croppedBuffer = await captureCleanErrorScreenshot(adb, region, rawScreen);
                     await webhook.send({
                       content: errorMsg,
                       fileBuffer: croppedBuffer,
@@ -1059,7 +1094,7 @@ export class MacroManager {
               try {
                 const webhook = botManager.getWebhookService();
                 if (webhook.isConfigured()) {
-                  const croppedBuffer = await TemplateMatcher.cropRawToPng(rawScreen, region);
+                  const croppedBuffer = await captureCleanErrorScreenshot(adb, region, rawScreen);
                   await webhook.send({
                     content: errorMsg,
                     fileBuffer: croppedBuffer,
