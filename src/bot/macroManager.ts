@@ -531,21 +531,40 @@ export class MacroManager {
           type: 'screenshot',
           label: 'Capture full Android screenshot'
         });
-      } else if (action === 'swipe' || action === 'scroll') {
-        const x1 = parseInt(parts[1], 10) || 500;
-        const y1 = parseInt(parts[2], 10) || 1500;
-        const x2 = parseInt(parts[3], 10) || 500;
-        const y2 = parseInt(parts[4], 10) || 500;
-        const duration = parseInt(parts[5], 10) || 300;
-        steps.push({
-          type: 'swipe',
-          startX: x1,
-          startY: y1,
-          endX: x2,
-          endY: y2,
-          durationMs: duration,
-          label: `Swipe (${x1},${y1}) -> (${x2},${y2}) in ${duration}ms`
-        });
+      } else if (action === 'swipe' || action === 'scroll' || action === 'move' || action === 'pan') {
+        const dir = (parts[1] || '').toLowerCase();
+        if (['up', 'down', 'left', 'right'].includes(dir)) {
+          const dist = parseInt(parts[2], 10) || 500;
+          let x1 = 540, y1 = 1200, x2 = 540, y2 = 1200;
+          if (dir === 'up') { y1 = 1200 - Math.floor(dist / 2); y2 = 1200 + Math.floor(dist / 2); }
+          else if (dir === 'down') { y1 = 1200 + Math.floor(dist / 2); y2 = 1200 - Math.floor(dist / 2); }
+          else if (dir === 'left') { x1 = 540 - Math.floor(dist / 2); x2 = 540 + Math.floor(dist / 2); }
+          else if (dir === 'right') { x1 = 540 + Math.floor(dist / 2); x2 = 540 - Math.floor(dist / 2); }
+          steps.push({
+            type: 'swipe',
+            startX: x1,
+            startY: y1,
+            endX: x2,
+            endY: y2,
+            durationMs: 400,
+            label: `Pan map ${dir} by ${dist}px`
+          });
+        } else {
+          const x1 = parseInt(parts[1], 10) || 500;
+          const y1 = parseInt(parts[2], 10) || 1500;
+          const x2 = parseInt(parts[3], 10) || 500;
+          const y2 = parseInt(parts[4], 10) || 500;
+          const duration = parseInt(parts[5], 10) || 300;
+          steps.push({
+            type: 'swipe',
+            startX: x1,
+            startY: y1,
+            endX: x2,
+            endY: y2,
+            durationMs: duration,
+            label: `Swipe (${x1},${y1}) -> (${x2},${y2}) in ${duration}ms`
+          });
+        }
       } else if (action === 'text' || action === 'type') {
         const text = parts.slice(1).join(' ');
         steps.push({

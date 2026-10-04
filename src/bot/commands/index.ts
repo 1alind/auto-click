@@ -1223,6 +1223,21 @@ const COMMAND_MANUALS: Record<string, string> = {
     '• `ai test` — analyzes screen without tapping'
   ].join('\n'),
 
+  move: [
+    '**move** — Aircraft Carrier (AC) movement automation',
+    'usage: `move`',
+    '1. Checks 20-94 455-529 for `fleet.png` (if no match: clicks 939-1062 2175-2302; if matched: ignores click)',
+    '2. Clicks 644-688 2075-2119',
+    '3. Clicks 278-685 951-1047',
+    '4. Clicks 595-880 1723-1807',
+    '5. Clicks 236-325 1455-1544',
+    '6. Checks 460-669 1601-1645 for `acd1.png` (if matched: clicks 526-620 1469-1543)',
+    '7. Verifies 576-849 1407-1499 with `acd2.png` and clicks it',
+    '8. Verifies 597-970 2181-2299 with `acd3.png` and clicks it',
+    '9. Waits 2 seconds',
+    '10. Scans texts in 8-143 1832-1966 for timer, sends "ac will be areive in ...", and sends "arrived." when done'
+  ].join('\n'),
+
   test: [
     '**test** — Test comparing asbtn.png in region 725-800 951-1022 & see click target without tapping',
     'usage:',

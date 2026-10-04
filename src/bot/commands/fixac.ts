@@ -82,7 +82,7 @@ export async function recognizeLinesWithTimeout(
   ]);
 }
 
-function resolveAutoclickImagePath(imageName: string): string | null {
+export function resolveAutoclickImagePath(imageName: string): string | null {
   const clean = imageName.trim();
   const homeDir = process.env.HOME || os.homedir() || '';
   const sharedDirs = [

@@ -762,6 +762,23 @@ export class AdbController {
   }
 
   /**
+   * Retrieves the physical screen resolution of the connected device.
+   */
+  public async getScreenResolution(): Promise<{ width: number; height: number }> {
+    try {
+      const out = await this.shell('wm size');
+      const match = out.match(/(\d+)x(\d+)/);
+      if (match) {
+        return {
+          width: parseInt(match[1], 10),
+          height: parseInt(match[2], 10)
+        };
+      }
+    } catch {}
+    return { width: 1080, height: 2400 };
+  }
+
+  /**
    * Executes an ADB shell command and returns trimmed stdout.
    */
   public async shell(cmd: string): Promise<string> {
