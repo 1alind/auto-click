@@ -76,6 +76,80 @@ async function sendFailureScreenshot(
 }
 
 /**
+ * Searches for specific text in a region using OCR.
+ */
+async function checkTextInRegion(
+  adb: any,
+  region: { minX: number; maxX: number; minY: number; maxY: number },
+  targetWord: string | RegExp
+): Promise<{ found: boolean; text: string }> {
+  try {
+    const screenPng = await adb.screencap();
+    const screenImg = await Jimp.read(screenPng);
+    const screenW = screenImg.bitmap.width;
+    const screenH = screenImg.bitmap.height;
+
+    const cropX = Math.max(0, region.minX);
+    const cropY = Math.max(0, region.minY);
+    const cropW = Math.max(10, Math.min(region.maxX - cropX, screenW - cropX));
+    const cropH = Math.max(10, Math.min(region.maxY - cropY, screenH - cropY));
+
+    const cropped = screenImg.clone().crop({ x: cropX, y: cropY, w: cropW, h: cropH });
+    cropped.resize({ w: cropW * 2, h: cropH * 2 });
+    const cropBuf = await cropped.getBuffer('image/png');
+
+    const ocrRes = await recognizeLinesWithTimeout(cropBuf, cropX, cropY, 2, 4000);
+    const fullText = (ocrRes.fullText || ocrRes.lines.map((l) => l.text).join(' ')).trim();
+
+    const isMatch = typeof targetWord === 'string'
+      ? new RegExp(`\\b${targetWord}\\b`, 'i').test(fullText) || fullText.toLowerCase().includes(targetWord.toLowerCase())
+      : targetWord.test(fullText);
+
+    return { found: isMatch, text: fullText };
+  } catch {
+    return { found: false, text: '' };
+  }
+}
+
+/**
+ * Searches for text across full screen or region, returning target center point.
+ */
+async function findAndClickText(
+  adb: any,
+  textToFind: string | RegExp,
+  region?: { minX: number; maxX: number; minY: number; maxY: number }
+): Promise<{ found: boolean; point?: { x: number; y: number }; text?: string; line?: any }> {
+  try {
+    const screenPng = await adb.screencap();
+    const screenImg = await Jimp.read(screenPng);
+    const screenW = screenImg.bitmap.width;
+    const screenH = screenImg.bitmap.height;
+
+    const cropX = region ? Math.max(0, region.minX) : 0;
+    const cropY = region ? Math.max(0, region.minY) : 0;
+    const cropW = region ? Math.min(region.maxX - cropX, screenW - cropX) : screenW;
+    const cropH = region ? Math.min(region.maxY - cropY, screenH - cropY) : screenH;
+
+    const cropped = screenImg.clone().crop({ x: cropX, y: cropY, w: cropW, h: cropH });
+    cropped.resize({ w: cropW * 2, h: cropH * 2 });
+    const cropBuf = await cropped.getBuffer('image/png');
+
+    const ocrRes = await recognizeLinesWithTimeout(cropBuf, cropX, cropY, 2, 5000);
+    const regex = typeof textToFind === 'string' ? new RegExp(textToFind, 'i') : textToFind;
+
+    const matchedLine = ocrRes.lines.find((l) => regex.test(l.text));
+    if (matchedLine) {
+      const targetX = Math.floor((matchedLine.x0 + matchedLine.x1) / 2);
+      const targetY = Math.floor((matchedLine.y0 + matchedLine.y1) / 2);
+      return { found: true, point: { x: targetX, y: targetY }, text: matchedLine.text, line: matchedLine };
+    }
+    return { found: false };
+  } catch {
+    return { found: false };
+  }
+}
+
+/**
  * Checks if travel timer digits/text exist in area 8-143 1832-1966.
  * Uses an expanded crop window to reliably handle all zoom levels and button resizing.
  */
@@ -268,8 +342,128 @@ export const moveCommand: CommandDefinition = {
         ctx.log(`Tapped (${tapAcd1.x}, ${tapAcd1.y}) on acd1 button`, 'info');
         await sleep(500);
       } else {
-        ctx.log('acd1 button not matched/needed, continuing...', 'info');
-        await sleep(300);
+        ctx.log('acd1 button not matched -> checking for prompt text "Yes" in 579-970 1707-1799...', 'info');
+        const yesCheck = await checkTextInRegion(
+          adb,
+          { minX: 579, maxX: 970, minY: 1707, maxY: 1799 },
+          'Yes'
+        );
+
+        if (yesCheck.found) {
+          ctx.log(`Found prompt "Yes" (OCR: "${yesCheck.text}") -> clicking 158-507 1704-1796...`, 'info');
+          const tapPromptOther = await adb.tapRandomRange(158, 507, 1704, 1796);
+          ctx.log(`Tapped (${tapPromptOther.x}, ${tapPromptOther.y}) in 158-507 1704-1796`, 'info');
+          await sleep(500);
+
+          ctx.log('Clicking follow-up in 932-1056 2175-2305...', 'info');
+          const tapFollowUp = await adb.tapRandomRange(932, 1056, 2175, 2305);
+          ctx.log(`Tapped (${tapFollowUp.x}, ${tapFollowUp.y}) in 932-1056 2175-2305`, 'info');
+          await sleep(600);
+
+          // Swipe down all the way to reveal the building
+          ctx.log('👇 Swiping down all the way to make building visible...', 'info');
+          const screenRes = await adb.getScreenResolution();
+          const sW = screenRes.width || 1080;
+          const sH = screenRes.height || 2400;
+          const swipeX = Math.floor(sW / 2);
+          const fromY = Math.floor(sH * 0.20);
+          const toY = Math.floor(sH * 0.85);
+          await adb.swipe(swipeX, fromY, swipeX, toY, 600);
+          await sleep(700);
+
+          // Click building at 299-403 731-866
+          ctx.log('👉 Clicking building in 299-403 731-866...', 'info');
+          const tapBuilding = await adb.tapRandomRange(299, 403, 731, 866);
+          ctx.log(`Tapped (${tapBuilding.x}, ${tapBuilding.y}) in 299-403 731-866`, 'info');
+          await sleep(600);
+
+          // Check if shiprepair.png exists in 569-737 836-973 (if yes click, if not ignore)
+          ctx.log('🔍 Checking for shiprepair.png in 569-737 836-973...', 'info');
+          const shipRepairPath = resolveAutoclickImagePath('shiprepair.png');
+          if (shipRepairPath) {
+            rawScreen = await adb.screencapRaw();
+            const shipMatch = await matchWithZoomResilience(
+              rawScreen,
+              shipRepairPath,
+              { minX: 569, maxX: 737, minY: 836, maxY: 973 },
+              0.65
+            );
+            if (shipMatch.found) {
+              ctx.log(`shiprepair.png found at (${shipMatch.targetPoint.x}, ${shipMatch.targetPoint.y}) -> clicking it!`, 'info');
+              await adb.tap(shipMatch.targetPoint.x, shipMatch.targetPoint.y);
+              await sleep(500);
+            } else {
+              ctx.log('shiprepair.png not found, ignoring as requested.', 'info');
+            }
+          }
+
+          // Swipe to the left and search for text "Elizabeth" until found, then click it
+          ctx.log('🔍 Searching for text "Elizabeth" (swiping left as needed)...', 'info');
+          let elizabethPoint: { x: number; y: number } | undefined;
+          const maxElizabethSwipes = 8;
+
+          for (let s = 0; s <= maxElizabethSwipes; s++) {
+            const elizCheck = await findAndClickText(adb, /elizabeth/i);
+            if (elizCheck.found && elizCheck.point) {
+              elizabethPoint = elizCheck.point;
+              ctx.log(`👑 Found "Elizabeth" at (${elizabethPoint.x}, ${elizabethPoint.y}) (text: "${elizCheck.text}") -> clicking it!`, 'info');
+              await adb.tap(elizabethPoint.x, elizabethPoint.y);
+              await sleep(600);
+              break;
+            }
+
+            if (s < maxElizabethSwipes) {
+              ctx.log(`👉 Swiping left (attempt ${s + 1}/${maxElizabethSwipes}) to find "Elizabeth"...`, 'info');
+              const swipeY = Math.floor(sH * 0.50);
+              await adb.swipe(Math.floor(sW * 0.80), swipeY, Math.floor(sW * 0.20), swipeY, 400);
+              await sleep(700);
+            } else {
+              ctx.log('⚠️ "Elizabeth" not found after max swipes, continuing...', 'warn');
+            }
+          }
+
+          // After clicking elizabeth, search for img acre.png above the text, then click acre.png
+          ctx.log('🔍 Searching for acre.png above Elizabeth text...', 'info');
+          rawScreen = await adb.screencapRaw();
+          const acrePath = resolveAutoclickImagePath('acre.png');
+          if (acrePath) {
+            const acreRegion = elizabethPoint
+              ? { minX: 0, maxX: sW, minY: Math.max(0, elizabethPoint.y - 700), maxY: Math.max(100, elizabethPoint.y + 50) }
+              : undefined;
+
+            const acreMatch = await matchWithZoomResilience(rawScreen, acrePath, acreRegion, 0.62);
+            if (acreMatch.found) {
+              ctx.log(`acre.png found at (${acreMatch.targetPoint.x}, ${acreMatch.targetPoint.y}) with score ${(acreMatch.score * 100).toFixed(1)}% -> clicking it!`, 'info');
+              await adb.tap(acreMatch.targetPoint.x, acreMatch.targetPoint.y);
+              await sleep(600);
+            } else {
+              ctx.log('⚠️ acre.png not found on screen, continuing...', 'warn');
+            }
+          } else {
+            ctx.log('⚠️ acre.png image file not found on SD card, skipping.', 'warn');
+          }
+
+          // Search for text "Repair" in area 376-717 1865-1971 and click it
+          ctx.log('🔍 Searching for "Repair" in 376-717 1865-1971...', 'info');
+          const repairCheck = await findAndClickText(adb, /repair/i, { minX: 376, maxX: 717, minY: 1865, maxY: 1971 });
+          if (repairCheck.found && repairCheck.point) {
+            ctx.log(`Found "Repair" text at (${repairCheck.point.x}, ${repairCheck.point.y}) -> clicking it!`, 'info');
+            await adb.tap(repairCheck.point.x, repairCheck.point.y);
+          } else {
+            ctx.log('Tapping default range for "Repair" in 376-717 1865-1971...', 'info');
+            await adb.tapRandomRange(376, 717, 1865, 1971);
+          }
+          await sleep(600);
+
+          // After repair click X: 939–1062, Y: 2175–2302
+          ctx.log('👉 After repair: Clicking 939-1062 2175-2302...', 'info');
+          const tapPostRepair = await adb.tapRandomRange(939, 1062, 2175, 2302);
+          ctx.log(`Tapped (${tapPostRepair.x}, ${tapPostRepair.y}) in 939-1062 2175-2302`, 'info');
+          await sleep(600);
+        } else {
+          ctx.log('Prompt "Yes" not found, continuing regular clicks...', 'info');
+          await sleep(300);
+        }
       }
 
       // =========================================================================

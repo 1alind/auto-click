@@ -1231,7 +1231,7 @@ const COMMAND_MANUALS: Record<string, string> = {
     '3. Clicks 278-685 951-1047',
     '4. Clicks 595-880 1723-1807',
     '5. Clicks fixed location 230 1520',
-    '6. Searches for `acd1.png` button and clicks it directly at its detected position',
+    '6. Searches for `acd1.png` and clicks it; if prompt "Yes" is found: clicks 158-507 1704-1796, 932-1056 2175-2305, swipes down, clicks 299-403 731-866, checks shiprepair.png, swipes left for "Elizabeth", clicks acre.png, clicks "Repair" in 376-717 1865-1971, and clicks 939-1062 2175-2302',
     '7. Verifies 576-849 1407-1499 with `acd2.png` and clicks it',
     '8. Verifies 597-970 2181-2299 with `acd3.png` and clicks it',
     '9. Waits 2 seconds',
