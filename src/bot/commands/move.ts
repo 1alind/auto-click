@@ -187,34 +187,52 @@ export const moveCommand: CommandDefinition = {
       await sleep(600);
 
       // =========================================================================
-      // STEP 6: Check area 460-669 1601-1645 for acd1.png
-      // If YES -> click fixed location 230 1520
+      // STEP 6: Search for acd1.png button and click it directly
       // =========================================================================
       currentStep = 6;
-      ctx.log('🔍 Step 6: Checking area 460-669 1601-1645 for acd1.png...', 'info');
+      ctx.log('🔍 Step 6: Searching for acd1.png button...', 'info');
       rawScreen = await adb.screencapRaw();
       const acd1Path = resolveAutoclickImagePath('acd1.png');
 
       let acd1Matched = false;
+      let tapX6 = 0;
+      let tapY6 = 0;
+
       if (acd1Path) {
-        const match1 = await TemplateMatcher.matchRaw(rawScreen, acd1Path, {
+        // Try region 460-669 1601-1645 first
+        let match1 = await TemplateMatcher.matchRaw(rawScreen, acd1Path, {
           region: { minX: 460, maxX: 669, minY: 1601, maxY: 1645 },
-          threshold: 0.72,
+          threshold: 0.68,
           scales: [0.85, 1.0, 1.15]
         });
-        acd1Matched = match1.found;
-        ctx.log(`acd1.png match: ${match1.found} (score: ${(match1.score * 100).toFixed(1)}%)`, 'info');
+
+        // If not found in narrow region, search entire screen
+        if (!match1.found) {
+          match1 = await TemplateMatcher.matchRaw(rawScreen, acd1Path, {
+            threshold: 0.68,
+            scales: [0.85, 1.0, 1.15]
+          });
+        }
+
+        if (match1.found) {
+          acd1Matched = true;
+          tapX6 = match1.targetPoint.x;
+          tapY6 = match1.targetPoint.y;
+          ctx.log(`acd1.png button found at (${tapX6}, ${tapY6}) with score ${(match1.score * 100).toFixed(1)}%!`, 'info');
+        } else {
+          ctx.log(`acd1.png match score ${(match1.score * 100).toFixed(1)}% (< 68%), skipping acd1 tap.`, 'info');
+        }
       } else {
         ctx.log('⚠️ acd1.png not found on SD card, skipping conditional tap.', 'warn');
       }
 
-      if (acd1Matched) {
-        ctx.log('acd1.png matched -> clicking fixed location (230, 1520)...', 'info');
-        const tapAcd1 = await adb.tap(230, 1520);
-        ctx.log(`Tapped (${tapAcd1.x}, ${tapAcd1.y}) for acd1.png`, 'info');
+      if (acd1Matched && tapX6 > 0 && tapY6 > 0) {
+        ctx.log(`👉 Clicking acd1 button itself at (${tapX6}, ${tapY6})...`, 'info');
+        const tapAcd1 = await adb.tap(tapX6, tapY6);
+        ctx.log(`Tapped (${tapAcd1.x}, ${tapAcd1.y}) on acd1 button`, 'info');
         await sleep(500);
       } else {
-        ctx.log('acd1.png not matched, continuing...', 'info');
+        ctx.log('acd1 button not matched/needed, continuing...', 'info');
         await sleep(300);
       }
 
