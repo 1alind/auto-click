@@ -53,14 +53,58 @@ export class AdbController {
   }
 
   /**
-   * Uses nmap to scan 127.0.0.1 ports 30000-50000 for open Wireless Debugging ports and connects automatically.
+   * Automatically turns Android Wireless Debugging and ADB TCP/IP back ON
+   * whenever Wi-Fi disconnects/reconnects or wireless debugging is toggled off.
+   */
+  public async ensureWirelessDebuggingEnabled(): Promise<boolean> {
+    let success = false;
+
+    // 1. Android settings binary / global settings put
+    try {
+      await execPromise('settings put global adb_wifi_enabled 1').catch(() => {});
+      await execPromise('settings put global adb_enabled 1').catch(() => {});
+      success = true;
+    } catch {}
+
+    // 2. If Shizuku / rish is available in Termux environment
+    try {
+      await execPromise('rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"').catch(() => {});
+      success = true;
+    } catch {}
+
+    // 3. If root / su is available
+    try {
+      await execPromise('su -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"').catch(() => {});
+      success = true;
+    } catch {}
+
+    // 4. Over active ADB session if available
+    try {
+      if (this.serial) {
+        await execPromise(`adb -s ${this.serial} shell settings put global adb_wifi_enabled 1`).catch(() => {});
+        await execPromise(`adb -s ${this.serial} tcpip 5555`).catch(() => {});
+      } else {
+        await execPromise('adb shell settings put global adb_wifi_enabled 1').catch(() => {});
+        await execPromise('adb tcpip 5555').catch(() => {});
+      }
+      success = true;
+    } catch {}
+
+    return success;
+  }
+
+  /**
+   * Uses nmap to scan 127.0.0.1 ports 5555 and 30000-50000 for open Wireless Debugging ports and connects automatically.
    */
   public async scanWithNmapAndConnect(): Promise<string> {
     try {
+      // Proactively ensure Wireless Debugging is enabled before scanning
+      await this.ensureWirelessDebuggingEnabled().catch(() => {});
+
       await execPromise('adb start-server').catch(() => {});
-      const { stdout } = await execPromise('nmap -p 30000-50000 --open -T4 127.0.0.1');
+      const { stdout } = await execPromise('nmap -p 5555,30000-50000 --open -T4 127.0.0.1');
       const openPorts: string[] = [];
-      const regex = /(\d{5})\/tcp\s+open/gi;
+      const regex = /(\d{4,5})\/tcp\s+open/gi;
       let match: RegExpExecArray | null;
       while ((match = regex.exec(stdout)) !== null) {
         openPorts.push(match[1]);
@@ -85,6 +129,8 @@ export class AdbController {
           if (isOnline) {
             this.serial = target;
             this.host = target;
+            // Reinforce adb_wifi_enabled over the newly connected session
+            await this.ensureWirelessDebuggingEnabled().catch(() => {});
             return target;
           }
         }
@@ -97,13 +143,44 @@ export class AdbController {
 
   /**
    * Starts a continuous background watcher on startup so the script automatically finds the port
-   * via nmap (127.0.0.1:30000-50000) without waiting for a `connect` command.
-   * Sends the "no port" message to Discord ONLY ONCE per disconnect and keeps trying every 10s in background
-   * unless `stop` is sent.
+   * and auto-enables wireless debugging whenever it turns off.
    */
   public startBackgroundAutoConnect(): void {
     if (this.isAutoConnecting) return;
     this.autoConnectWithRetry().catch(() => {});
+    this.startWifiDebuggingWatcher();
+  }
+
+  private wifiWatcherStarted = false;
+
+  /**
+   * Starts a continuous watchdog loop that ensures wireless debugging is always ON and reconnects on drop.
+   */
+  public startWifiDebuggingWatcher(): void {
+    if (this.wifiWatcherStarted) return;
+    this.wifiWatcherStarted = true;
+
+    setInterval(async () => {
+      if (this.autoConnectStopped) return;
+
+      try {
+        const devices = await this.getDevices().catch(() => []);
+        const hasOnline = devices.some((d) => d.state === 'device');
+
+        if (!hasOnline) {
+          // Wireless debugging disconnected or turned off -> turn it back on and auto-reconnect!
+          await this.ensureWirelessDebuggingEnabled().catch(() => {});
+          if (!this.isAutoConnecting) {
+            this.scanWithNmapAndConnect().catch(() => {});
+          }
+        } else {
+          // Connected: periodically ensure wireless debugging stays enabled in global settings
+          await this.ensureWirelessDebuggingEnabled().catch(() => {});
+        }
+      } catch {
+        // ignore
+      }
+    }, 8000);
   }
 
   /**

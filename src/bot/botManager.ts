@@ -199,6 +199,7 @@ export class BotManager {
         if (onlineLocal) {
           this.adb.setSerial(onlineLocal.serial);
           this.adb.setHost(onlineLocal.serial);
+          this.adb.startWifiDebuggingWatcher();
           if (this.webhook.isConfigured()) {
             await this.webhook.send({ content: `connected to ${onlineLocal.serial}` }).catch(() => {});
           }
