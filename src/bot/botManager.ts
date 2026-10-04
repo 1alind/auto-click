@@ -8,6 +8,7 @@ import { DiscordBotClient } from './discordBot';
 import { findCommand } from './commands/find';
 import { fixacCommand, textsCommand } from './commands/fixac';
 import { subCommand } from './commands/sub';
+import { aiCommand } from './commands/ai';
 import {
   tapCommand,
   screenshotCommand,
@@ -168,6 +169,7 @@ export class BotManager {
     this.discord.registerCommand(stopCommand);
     this.discord.registerCommand(testCommand);
     this.discord.registerCommand(liveCommand);
+    this.discord.registerCommand(aiCommand);
 
     // Load and register all saved custom macros as direct commands (e.g. "start")
     import('./macroManager').then(({ MacroManager }) => {
@@ -370,12 +372,19 @@ export class BotManager {
     const candidatePaths = [
       path.resolve(process.cwd(), 'bot-config.json'),
       path.resolve(process.cwd(), 'auto-click.json'),
+      path.resolve(process.cwd(), 'config.json'),
       '/sdcard/auto-click.json',
+      '/sdcard/autoclick.json',
+      '/sdcard/config.json',
       '/storage/emulated/0/auto-click.json',
       path.resolve(homeDir, 'storage/shared/auto-click.json'),
       '/sdcard/autoclick/auto-click.json',
+      '/sdcard/autoclick/autoclick.json',
+      '/sdcard/autoclick/config.json',
       '/storage/emulated/0/autoclick/auto-click.json',
+      '/storage/emulated/0/autoclick/config.json',
       path.resolve(homeDir, 'storage/shared/autoclick/auto-click.json'),
+      path.resolve(homeDir, 'storage/shared/autoclick/config.json'),
       targetPath
     ];
 
@@ -404,6 +413,21 @@ export class BotManager {
             mergedConfig.githubToken = tokenVal.trim();
             process.env.GH_TOKEN = tokenVal.trim();
             process.env.GITHUB_TOKEN = tokenVal.trim();
+          }
+
+          // Explicitly check for all GEMINI_API_KEY alias variations in the json file
+          const geminiVal =
+            parsed.GEMINI_API_KEY ||
+            parsed.gemini_api_key ||
+            parsed.geminiApiKey ||
+            parsed.geminiKey ||
+            parsed.geminiToken ||
+            parsed.aiKey;
+          if (geminiVal && typeof geminiVal === 'string' && geminiVal.trim()) {
+            mergedConfig.geminiApiKey = geminiVal.trim();
+            if (!process.env.GEMINI_API_KEY) {
+              process.env.GEMINI_API_KEY = geminiVal.trim();
+            }
           }
           foundAny = true;
         } catch (err) {

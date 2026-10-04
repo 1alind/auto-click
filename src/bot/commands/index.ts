@@ -1214,6 +1214,15 @@ const COMMAND_MANUALS: Record<string, string> = {
     '12. Taps 10x10 px center of screen (waits 0.5s)'
   ].join('\n'),
 
+  ai: [
+    '**ai** — Gemini 3.8 Flash Vision Self-Learning Prompt Memory',
+    'usage:',
+    '• `ai` — scans current screen for unexpected dialogs/popups with Gemini Flash, clicks to resolve, and saves template to sdcard',
+    '• `ai list` — lists all learned prompts stored on sdcard and how many times they were reused offline',
+    '• `ai forget <id>` — deletes a prompt from learned memory on sdcard',
+    '• `ai test` — analyzes screen without tapping'
+  ].join('\n'),
+
   test: [
     '**test** — Test comparing asbtn.png in region 725-800 951-1022 & see click target without tapping',
     'usage:',
@@ -1390,6 +1399,7 @@ export const helpCommand: CommandDefinition = {
 
     const manualOverview = [
       '**bot manual** — send `help <command>` for detailed usage (e.g. `help macro`, `help test`, `help find`)',
+      '• `ai` — Gemini Vision unexpected prompt learner (`help ai`)',
       '• `find` — run automated pfp search, tap & 150×150 center crop sequence',
       '• `test` — benchmark time taken to capture, crop & compare an image (`help test`)',
       '• `macro` — create & manage custom multi-step commands (`help macro`)',

@@ -80,6 +80,29 @@ async function startServer() {
     res.json({ success: true, commands });
   });
 
+  app.get('/api/ai/learned', async (_req, res) => {
+    try {
+      const { aiLearner } = await import('./src/bot/aiLearner');
+      res.json({
+        success: true,
+        storageDir: aiLearner.getStorageDir(),
+        prompts: aiLearner.getLearnedPrompts()
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete('/api/ai/learned/:id', async (req, res) => {
+    try {
+      const { aiLearner } = await import('./src/bot/aiLearner');
+      const forgotten = aiLearner.forgetPrompt(req.params.id);
+      res.json({ success: forgotten });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.post('/api/command/run', async (req, res) => {
     try {
       const { name, args } = req.body;

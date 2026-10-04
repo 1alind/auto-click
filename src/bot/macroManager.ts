@@ -4,6 +4,7 @@ import os from 'os';
 import { CommandContext, CommandResult, StepLog } from './types';
 import { TemplateMatcher } from './matcher';
 import { RefImageManager } from './refImage';
+import { aiLearner } from './aiLearner';
 
 export type MacroActionType =
   | 'tap'
@@ -1020,6 +1021,53 @@ export class MacroManager {
                 }
 
                 if (!recovered) {
+                  // =========================================================================
+                  // STEP A: Offline Prompt Memory (0 AI calls, 5ms from sdcard)
+                  // =========================================================================
+                  const offlineLearned = await aiLearner.checkAndExecuteLearnedPrompt(adb);
+                  if (offlineLearned.found && offlineLearned.prompt) {
+                    ctx.log(
+                      `🧠 Offline Prompt Memory: Recognized learned prompt "${offlineLearned.prompt.name}" from sdcard! Tapped (${offlineLearned.prompt.clickX}, ${offlineLearned.prompt.clickY}). Resuming...`,
+                      'info'
+                    );
+                    if (webhook.isConfigured()) {
+                      await webhook
+                        .send({
+                          content: `🧠 **Offline Prompt Solved**: Recognized \`${offlineLearned.prompt.name}\` from sdcard! Tapped \`(${offlineLearned.prompt.clickX}, ${offlineLearned.prompt.clickY})\` (reused ${offlineLearned.prompt.timesUsed} times). Resuming...`
+                        })
+                        .catch(() => {});
+                    }
+                    await sleep(800);
+                    i--; // Retry current step
+                    continue;
+                  }
+
+                  // =========================================================================
+                  // STEP B: Gemini AI Vision Rescue & Self-Learning to SDCard
+                  // =========================================================================
+                  const hasApiKey = Boolean(process.env.GEMINI_API_KEY || config.geminiApiKey);
+                  if (hasApiKey) {
+                    ctx.log(`🤖 Step ${stepNumber} blocked — asking Gemini 3.8 Flash Vision to analyze unexpected prompt...`, 'info');
+                    const aiRescue = await aiLearner.rescueWithGeminiAndLearn(adb, {
+                      customApiKey: config.geminiApiKey,
+                      log: (msg, lvl) => ctx.log(msg, lvl || 'info')
+                    });
+
+                    if (aiRescue.success && aiRescue.promptDetected && aiRescue.clickCoords) {
+                      ctx.log(`🎉 AI Rescue Success: ${aiRescue.message}`, 'info');
+                      if (webhook.isConfigured()) {
+                        await webhook
+                          .send({
+                            content: `🤖 **AI Learned New Prompt**: \`${aiRescue.name}\`!\n• Action: ${aiRescue.description}\n• Tapped: \`(${aiRescue.clickCoords.x}, ${aiRescue.clickCoords.y})\`\n• 💾 **Saved to sdcard**: will be handled 100% offline in future without AI!`
+                          })
+                          .catch(() => {});
+                      }
+                      await sleep(1200);
+                      i--; // Retry current step
+                      continue;
+                    }
+                  }
+
                   const scorePct = match.score * 100;
                   const threshPct = effectiveThreshold * 100;
                   const errorMsg = `❌ Image "${targetName}" NOT found in ${macro.name} step ${stepNumber} (and no fallback buttons found)! Score: ${scorePct.toFixed(1)}% (< ${threshPct.toFixed(0)}%). Stopping macro.`;
@@ -1053,6 +1101,33 @@ export class MacroManager {
                   return { success: false, message: errorMsg, steps: stepsLog };
                 }
               } else {
+                // Check offline learned prompts first
+                const offlineLearned = await aiLearner.checkAndExecuteLearnedPrompt(adb);
+                if (offlineLearned.found && offlineLearned.prompt) {
+                  ctx.log(
+                    `🧠 Offline Prompt Memory: Recognized learned prompt "${offlineLearned.prompt.name}"! Tapped (${offlineLearned.prompt.clickX}, ${offlineLearned.prompt.clickY}). Resuming...`,
+                    'info'
+                  );
+                  await sleep(800);
+                  i--;
+                  continue;
+                }
+
+                // Ask Gemini AI
+                const hasApiKey = Boolean(process.env.GEMINI_API_KEY || config.geminiApiKey);
+                if (hasApiKey) {
+                  const aiRescue = await aiLearner.rescueWithGeminiAndLearn(adb, {
+                    customApiKey: config.geminiApiKey,
+                    log: (msg, lvl) => ctx.log(msg, lvl || 'info')
+                  });
+                  if (aiRescue.success && aiRescue.promptDetected && aiRescue.clickCoords) {
+                    ctx.log(`🎉 AI Rescue Success: ${aiRescue.message}`, 'info');
+                    await sleep(1200);
+                    i--;
+                    continue;
+                  }
+                }
+
                 const scorePct = match.score * 100;
                 const threshPct = effectiveThreshold * 100;
                 const errorMsg = `❌ Image "${targetName}" NOT found in ${macro.name} step ${stepNumber}! Score: ${scorePct.toFixed(1)}% (< ${threshPct.toFixed(0)}%). Stopping macro.`;

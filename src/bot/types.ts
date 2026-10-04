@@ -13,6 +13,8 @@ export interface BotConfig {
   updateCheckIntervalMinutes: number; // e.g. 15 minutes
   autoRestartOnCrash: boolean;
   useSimulatorFallback?: boolean;
+  geminiApiKey?: string;
+  aiRescueEnabled?: boolean;
 }
 
 export interface MatchBoundingBox {
