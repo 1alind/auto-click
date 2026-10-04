@@ -14,6 +14,7 @@ export interface BotConfig {
   autoRestartOnCrash: boolean;
   useSimulatorFallback?: boolean;
   geminiApiKey?: string;
+  geminiModel?: string;
   aiRescueEnabled?: boolean;
 }
 

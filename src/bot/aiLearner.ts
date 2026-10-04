@@ -18,18 +18,29 @@ export interface LearnedPrompt {
   learnedAt: string;
   timesUsed: number;
   lastUsedAt?: string;
+  gamePackage?: string;
+}
+
+export interface ModelStatusEntry {
+  status: 'available' | 'high_demand';
+  lastFailedAt: string;
+  blacklistedUntil: number; // timestamp in ms
+  failureCount: number;
+  lastError: string;
 }
 
 export class AiLearner {
   private static instance: AiLearner;
   private learnedPrompts: LearnedPrompt[] = [];
+  private modelStatuses: Record<string, ModelStatusEntry> = {};
   private storageDir: string = '';
   private jsonPath: string = '';
-  private initialized = false;
+  private modelStatusPath: string = '';
 
   private constructor() {
     this.initStorage();
     this.loadLearnedPrompts();
+    this.loadModelStatuses();
   }
 
   public static getInstance(): AiLearner {
@@ -58,6 +69,7 @@ export class AiLearner {
           fs.mkdirSync(dir, { recursive: true });
           this.storageDir = dir;
           this.jsonPath = path.join(dir, 'learned_prompts.json');
+          this.modelStatusPath = path.join(dir, 'model_status.json');
           return;
         } catch {}
       }
@@ -67,6 +79,7 @@ export class AiLearner {
     this.storageDir = path.resolve(process.cwd(), 'data/learned_prompts');
     fs.mkdirSync(this.storageDir, { recursive: true });
     this.jsonPath = path.join(this.storageDir, 'learned_prompts.json');
+    this.modelStatusPath = path.join(this.storageDir, 'model_status.json');
   }
 
   public getStorageDir(): string {
@@ -75,6 +88,11 @@ export class AiLearner {
 
   public getLearnedPrompts(): LearnedPrompt[] {
     return [...this.learnedPrompts];
+  }
+
+  public getModelStatuses(): Record<string, ModelStatusEntry> {
+    this.loadModelStatuses();
+    return { ...this.modelStatuses };
   }
 
   private loadLearnedPrompts(): void {
@@ -99,6 +117,120 @@ export class AiLearner {
     } catch (err: any) {
       console.error('[AiLearner] Failed to save learned prompts:', err.message);
     }
+  }
+
+  /**
+   * Loads high-demand model cache from SD card
+   */
+  private loadModelStatuses(): void {
+    try {
+      if (fs.existsSync(this.modelStatusPath)) {
+        const raw = fs.readFileSync(this.modelStatusPath, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          this.modelStatuses = parsed;
+        }
+      }
+    } catch {
+      this.modelStatuses = {};
+    }
+  }
+
+  /**
+   * Persists high-demand model cache to SD card
+   */
+  private saveModelStatuses(): void {
+    try {
+      fs.mkdirSync(this.storageDir, { recursive: true });
+      fs.writeFileSync(this.modelStatusPath, JSON.stringify(this.modelStatuses, null, 2), 'utf8');
+    } catch (err: any) {
+      console.error('[AiLearner] Failed to save model statuses:', err.message);
+    }
+  }
+
+  /**
+   * Records a model as overloaded / high-demand in SD card memory with a 45-minute cooldown.
+   */
+  public recordModelHighDemand(modelName: string, errorMsg: string): void {
+    this.loadModelStatuses();
+    const existing = this.modelStatuses[modelName] || { failureCount: 0 };
+    const failureCount = (existing.failureCount || 0) + 1;
+    // 45 minute cooldown to give Google servers time to recover
+    const cooldownMs = 45 * 60 * 1000;
+
+    this.modelStatuses[modelName] = {
+      status: 'high_demand',
+      lastFailedAt: new Date().toISOString(),
+      blacklistedUntil: Date.now() + cooldownMs,
+      failureCount,
+      lastError: errorMsg
+    };
+
+    this.saveModelStatuses();
+  }
+
+  /**
+   * Clears a model's high-demand status (e.g. if it succeeded or user resets)
+   */
+  public markModelSuccess(modelName: string): void {
+    if (this.modelStatuses[modelName]) {
+      delete this.modelStatuses[modelName];
+      this.saveModelStatuses();
+    }
+  }
+
+  /**
+   * Checks if a model is currently blacklisted for high demand
+   */
+  public isModelHighDemand(modelName: string): boolean {
+    this.loadModelStatuses();
+    const entry = this.modelStatuses[modelName];
+    if (!entry) return false;
+    if (Date.now() > (entry.blacklistedUntil || 0)) {
+      // Cooldown expired!
+      delete this.modelStatuses[modelName];
+      this.saveModelStatuses();
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Returns list of candidate models, skipping any high-demand models recorded on the SD card,
+   * prioritizing ultra-reliable lower models.
+   */
+  public getCandidateModels(preferredModel?: string): {
+    orderedModels: string[];
+    skippedHighDemand: string[];
+  } {
+    this.loadModelStatuses();
+
+    // Standard list of models from lower/light to latest
+    const baseCandidates = [
+      preferredModel,
+      'gemini-3.1-flash-lite', // lower, ultra-high throughput, almost never overloaded
+      'gemini-flash-latest',   // production Flash
+      'gemini-3.8-flash'       // peak model
+    ].filter(Boolean) as string[];
+
+    const unique = Array.from(new Set(baseCandidates));
+    const active: string[] = [];
+    const skipped: string[] = [];
+
+    for (const m of unique) {
+      if (this.isModelHighDemand(m)) {
+        skipped.push(m);
+      } else {
+        active.push(m);
+      }
+    }
+
+    // If all models are currently flagged as high demand, fallback to 'gemini-3.1-flash-lite'
+    if (active.length === 0) {
+      active.push('gemini-3.1-flash-lite');
+    }
+
+    return { orderedModels: active, skippedHighDemand: skipped };
   }
 
   /**
@@ -151,12 +283,20 @@ export class AiLearner {
   /**
    * STEP 2 (Gemini AI Vision):
    * When no locally learned prompt matches, sends screenshot to Gemini Flash Vision.
-   * If Gemini spots a popup/prompt and coordinates, it clicks it, crops the signature,
-   * and saves it to the sdcard so future occurrences are handled 100% offline!
+   * - Includes current Game Name (auto-detected via ADB or user config)
+   * - Includes what the bot was doing (current step/action)
+   * - Checks SD card memory to bypass high-demand models and auto-uses lower models
+   * - If Gemini resolves, taps the button, crops the signature, and saves it to SD card!
    */
   public async rescueWithGeminiAndLearn(
     adb: AdbController,
-    options?: { customApiKey?: string; log?: (msg: string, level?: any) => void }
+    options?: {
+      customApiKey?: string;
+      customModel?: string;
+      gameName?: string;
+      currentAction?: string;
+      log?: (msg: string, level?: any) => void;
+    }
   ): Promise<{
     success: boolean;
     promptDetected: boolean;
@@ -164,6 +304,7 @@ export class AiLearner {
     description?: string;
     clickCoords?: { x: number; y: number };
     savedTemplatePath?: string;
+    modelUsed?: string;
     message: string;
   }> {
     const apiKey = options?.customApiKey || process.env.GEMINI_API_KEY;
@@ -186,7 +327,27 @@ export class AiLearner {
       const screenW = screenImg.bitmap.width;
       const screenH = screenImg.bitmap.height;
 
-      log(`🧠 Asking Gemini 3.8 Flash to analyze unexpected prompts (${screenW}x${screenH})...`, 'info');
+      // 1. Context: Detect active game and action
+      let activeGame = options?.gameName || '';
+      if (!activeGame) {
+        activeGame = await adb.getForegroundApp().catch(() => '');
+      }
+
+      const isGunshipBattle =
+        !activeGame ||
+        activeGame.includes('joycity') ||
+        activeGame.includes('gw') ||
+        activeGame.toLowerCase().includes('gunship');
+
+      const gameDisplay = isGunshipBattle
+        ? 'Gunship Battle: Total Warfare (Joycity - com.joycity.gw)'
+        : (activeGame || 'Gunship Battle: Total Warfare');
+
+      const actionDisplay =
+        options?.currentAction ||
+        'Automated Naval & Air Strike: Auto air-striking the Royal Armada Base with carrier jet squadrons';
+
+      log(`🎮 Game context: "${gameDisplay}" | Action: "${actionDisplay}"`, 'info');
 
       const ai = new GoogleGenAI({
         apiKey,
@@ -198,76 +359,139 @@ export class AiLearner {
       });
 
       const promptText = `You are an expert autonomous Android gamer and automation agent.
-Look at this game screenshot.
-An unexpected dialog, modal popup, daily login reward, announcement, rate us dialog, reconnect prompt, network error, or confirmation prompt might be blocking normal gameplay.
+CONTEXT:
+- Target Game/App: "${gameDisplay}"
+- Script Objective: "${actionDisplay}"
+- Situation: The bot is automating this game, but is currently stuck or blocked because an unexpected dialog, modal popup, daily login reward, announcement, rate us dialog, reconnect prompt, network error, or confirmation is on screen.
 
-Please analyze the image:
-1. Is an unexpected dialog, prompt, modal, or overlay currently visible?
-2. If YES:
+GAME-SPECIFIC KNOWLEDGE FOR GUNSHIP BATTLE: TOTAL WARFARE:
+- The bot is continuously executing air strikes against Royal Armada Bases using carrier jet squadrons.
+- Common blockers to resolve:
+  1. Event, Special Offer, or Daily Supply popup: Look for the small 'X' (close) icon (often top-right or top-left) or 'Close'/'Cancel' at the bottom.
+  2. Armada Base Destroyed / Target Moved / Target Out of Range: Tap 'Confirm' or 'OK' to dismiss the modal and return to sea view.
+  3. Battle Report / Victory / Defeat / Armada Durability Depleted: Tap 'Confirm', 'OK', or 'Tap to continue'.
+  4. Jet Repair / Durability / Sortie prompt: Tap 'Repair All', 'Confirm', or 'Close'.
+  5. Network Reconnect / Server Timeout: Tap 'Retry', 'Reconnect', or 'OK'.
+  6. Alliance Help / Rally alert: Tap 'Help' or 'Confirm' or 'X'.
+- SAFETY RULE: Never tap purchase buttons that cost real money or gold. Always prefer 'Close', 'X', 'Cancel', 'Confirm', or 'Claim Free'.
+
+TASK:
+1. Examine this screenshot carefully in the context of "${gameDisplay}".
+2. Is an unexpected dialog, prompt, modal, or overlay currently visible?
+3. If YES:
    - Identify what it is (name and description).
-   - Find the best button to dismiss, close, or accept it (e.g. 'X' close icon, 'Claim', 'OK', 'Confirm', 'Cancel', 'Close', 'Tap to continue').
+   - Find the exact button to dismiss, close, or accept it (e.g. 'X' close icon, 'Claim', 'OK', 'Confirm', 'Cancel', 'Close', 'Tap to continue').
    - Return the exact pixel coordinate (clickX, clickY) to tap that button.
-   - Return a small signature crop bounding box (minX, maxX, minY, maxY) around a distinct identifying visual part (like the prompt title banner, icon, or unique button) so we can save it to the sdcard and recognize it automatically in the future.
+   - Return a small signature crop bounding box (minX, maxX, minY, maxY) around a distinct identifying visual part (like the prompt title banner, icon, or unique button) so we can save it to the sdcard and recognize it automatically in the future without asking AI.
 Screen dimensions are ${screenW}x${screenH}. Ensure coordinates are strictly within bounds.`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: [
-          {
-            inlineData: {
-              mimeType: 'image/png',
-              data: base64Screen
-            }
-          },
-          {
-            text: promptText
-          }
-        ],
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              promptDetected: {
-                type: Type.BOOLEAN,
-                description: 'True if an unexpected prompt, modal, or popup is visible.'
+      // 2. Query SD card memory for high demand models & auto-pick available lower models
+      const { orderedModels, skippedHighDemand } = this.getCandidateModels(options?.customModel);
+
+      if (skippedHighDemand.length > 0) {
+        log(
+          `💾 Skipped high-demand models saved on SD card: [${skippedHighDemand.join(', ')}]. Auto-trying lower model...`,
+          'info'
+        );
+      }
+
+      let response: any = null;
+      let lastError: Error | null = null;
+      let successfulModel = '';
+
+      for (const modelName of orderedModels) {
+        try {
+          log(`🧠 Asking Gemini (${modelName}) to analyze unexpected prompts (${screenW}x${screenH})...`, 'info');
+          response = await ai.models.generateContent({
+            model: modelName,
+            contents: [
+              {
+                inlineData: {
+                  mimeType: 'image/png',
+                  data: base64Screen
+                }
               },
-              promptName: {
-                type: Type.STRING,
-                description: 'Short clean identifier for the prompt, e.g. "daily_reward" or "reconnect_dialog".'
-              },
-              description: {
-                type: Type.STRING,
-                description: 'Detailed description of the prompt.'
-              },
-              action: {
-                type: Type.STRING,
-                description: 'Action to take, e.g. "tap", "dismiss", "claim".'
-              },
-              clickX: {
-                type: Type.INTEGER,
-                description: 'Exact X pixel coordinate to tap.'
-              },
-              clickY: {
-                type: Type.INTEGER,
-                description: 'Exact Y pixel coordinate to tap.'
-              },
-              signatureCrop: {
-                type: Type.OBJECT,
-                description: 'Bounding box of the signature image to crop and remember on the sdcard.',
-                properties: {
-                  minX: { type: Type.INTEGER },
-                  maxX: { type: Type.INTEGER },
-                  minY: { type: Type.INTEGER },
-                  maxY: { type: Type.INTEGER }
-                },
-                required: ['minX', 'maxX', 'minY', 'maxY']
+              {
+                text: promptText
               }
-            },
-            required: ['promptDetected', 'promptName', 'action', 'clickX', 'clickY']
+            ],
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  promptDetected: {
+                    type: Type.BOOLEAN,
+                    description: 'True if an unexpected prompt, modal, or popup is visible.'
+                  },
+                  promptName: {
+                    type: Type.STRING,
+                    description: 'Short clean identifier for the prompt, e.g. "daily_reward" or "reconnect_dialog".'
+                  },
+                  description: {
+                    type: Type.STRING,
+                    description: 'Detailed description of the prompt.'
+                  },
+                  action: {
+                    type: Type.STRING,
+                    description: 'Action to take, e.g. "tap", "dismiss", "claim".'
+                  },
+                  clickX: {
+                    type: Type.INTEGER,
+                    description: 'Exact X pixel coordinate to tap.'
+                  },
+                  clickY: {
+                    type: Type.INTEGER,
+                    description: 'Exact Y pixel coordinate to tap.'
+                  },
+                  signatureCrop: {
+                    type: Type.OBJECT,
+                    description: 'Bounding box of the signature image to crop and remember on the sdcard.',
+                    properties: {
+                      minX: { type: Type.INTEGER },
+                      maxX: { type: Type.INTEGER },
+                      minY: { type: Type.INTEGER },
+                      maxY: { type: Type.INTEGER }
+                    },
+                    required: ['minX', 'maxX', 'minY', 'maxY']
+                  }
+                },
+                required: ['promptDetected', 'promptName', 'action', 'clickX', 'clickY']
+              }
+            }
+          });
+          successfulModel = modelName;
+          this.markModelSuccess(modelName);
+          break; // Model responded successfully!
+        } catch (err: any) {
+          lastError = err;
+          const errMsg = err.message || String(err);
+          const isHighDemand =
+            errMsg.includes('503') ||
+            errMsg.includes('overloaded') ||
+            errMsg.includes('demand') ||
+            errMsg.includes('ResourceExhausted') ||
+            errMsg.includes('quota');
+
+          if (isHighDemand) {
+            this.recordModelHighDemand(modelName, errMsg);
+            log(
+              `💾 Model "${modelName}" is in high demand! Saved to SD card (will skip on future runs). Trying lower model...`,
+              'warn'
+            );
+          } else {
+            log(`⚠️ Model "${modelName}" failed (${errMsg}). Trying lower model...`, 'warn');
           }
         }
-      });
+      }
+
+      if (!response) {
+        return {
+          success: false,
+          promptDetected: false,
+          message: `All Gemini models failed or busy: ${lastError?.message || 'High demand'}`
+        };
+      }
 
       const rawJson = response.text?.trim() || '{}';
       let parsed: any = {};
@@ -285,7 +509,8 @@ Screen dimensions are ${screenW}x${screenH}. Ensure coordinates are strictly wit
         return {
           success: true,
           promptDetected: false,
-          message: 'Gemini analyzed the screen: no unexpected prompt or modal is blocking the screen.'
+          modelUsed: successfulModel,
+          message: `Gemini (${successfulModel}) analyzed ${gameDisplay}: no unexpected prompt is blocking the screen.`
         };
       }
 
@@ -295,7 +520,7 @@ Screen dimensions are ${screenW}x${screenH}. Ensure coordinates are strictly wit
       const desc = parsed.description || name;
 
       // Tap the button to dismiss the prompt!
-      log(`🎯 Gemini identified "${name}"! Tapping (${clickX}, ${clickY}) to resolve...`, 'info');
+      log(`🎯 Gemini identified "${name}" in ${gameDisplay}! Tapping (${clickX}, ${clickY}) to resolve...`, 'info');
       await adb.tap(clickX, clickY);
 
       // Now save to sdcard so in the future we NEVER ask the AI again!
@@ -340,14 +565,15 @@ Screen dimensions are ${screenW}x${screenH}. Ensure coordinates are strictly wit
         },
         learnedAt: new Date().toISOString(),
         timesUsed: 1,
-        lastUsedAt: new Date().toISOString()
+        lastUsedAt: new Date().toISOString(),
+        gamePackage: activeGame
       };
 
       this.learnedPrompts.push(learnedEntry);
       this.saveLearnedPrompts();
 
       log(
-        `💾 Successfully learned "${name}"! Saved template to ${imageFileName} in ${this.storageDir}. Future prompts will be handled offline without AI!`,
+        `💾 Successfully learned "${name}"! Saved template to ${imageFileName} on SD card. Future occurrences will be resolved offline!`,
         'info'
       );
 
@@ -358,7 +584,8 @@ Screen dimensions are ${screenW}x${screenH}. Ensure coordinates are strictly wit
         description: desc,
         clickCoords: { x: clickX, y: clickY },
         savedTemplatePath: savedPath,
-        message: `Successfully resolved "${name}" at (${clickX}, ${clickY}) and saved to sdcard for future offline reuse!`
+        modelUsed: successfulModel,
+        message: `Successfully resolved "${name}" at (${clickX}, ${clickY}) via ${successfulModel} and saved to SD card!`
       };
     } catch (err: any) {
       return {

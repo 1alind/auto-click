@@ -429,6 +429,11 @@ export class BotManager {
               process.env.GEMINI_API_KEY = geminiVal.trim();
             }
           }
+
+          const modelVal = parsed.GEMINI_MODEL || parsed.gemini_model || parsed.geminiModel || parsed.aiModel;
+          if (modelVal && typeof modelVal === 'string' && modelVal.trim()) {
+            mergedConfig.geminiModel = modelVal.trim();
+          }
           foundAny = true;
         } catch (err) {
           // ignore error and try next

@@ -760,4 +760,42 @@ export class AdbController {
     this.screencapChain = next.catch(() => {});
     return next;
   }
+
+  /**
+   * Executes an ADB shell command and returns trimmed stdout.
+   */
+  public async shell(cmd: string): Promise<string> {
+    const isAdb = await this.isAdbAvailable();
+    if (!isAdb) return '';
+    try {
+      const adbTarget = await this.resolveTargetFlag();
+      const { stdout } = await execPromise(`adb ${adbTarget} shell "${cmd.replace(/"/g, '\\"')}"`);
+      return (stdout || '').trim();
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Retrieves the current foreground application / game package name.
+   */
+  public async getForegroundApp(): Promise<string> {
+    try {
+      const out = await this.shell("dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'").catch(() => '');
+      const match = out.match(/([a-zA-Z0-9._]+)\/([a-zA-Z0-9._]+)/);
+      if (match && match[1] && !match[1].includes('android.launcher') && !match[1].includes('nexuslauncher')) {
+        return match[1].trim();
+      }
+    } catch {}
+
+    try {
+      const out2 = await this.shell("dumpsys activity activities | grep ResumedActivity").catch(() => '');
+      const match2 = out2.match(/([a-zA-Z0-9._]+)\/([a-zA-Z0-9._]+)/);
+      if (match2 && match2[1]) {
+        return match2[1].trim();
+      }
+    } catch {}
+
+    return '';
+  }
 }

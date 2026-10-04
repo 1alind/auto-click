@@ -43,7 +43,32 @@ export const aiCommand: CommandDefinition = {
       return { success: true, message: output };
     }
 
-    // 2. ai forget <id>
+    // 2. ai models / ai status: show model health & SD card blacklist
+    if (subCommand === 'models' || subCommand === 'status') {
+      const statuses = aiLearner.getModelStatuses();
+      const { orderedModels, skippedHighDemand } = aiLearner.getCandidateModels(config.geminiModel);
+
+      const lines = [
+        `🤖 **Gemini AI Model Health & Priority**`,
+        `• **Active Priority Chain**: \`${orderedModels.join(' ➔ ')}\``,
+        `• **High-Demand Blacklist on SDCard**: ${
+          skippedHighDemand.length > 0
+            ? skippedHighDemand.map((m) => `❌ \`${m}\` *(recovering)*`).join(', ')
+            : 'None (all models healthy)'
+        }\n`
+      ];
+
+      for (const [name, info] of Object.entries(statuses)) {
+        const remainingMin = Math.max(0, Math.ceil((info.blacklistedUntil - Date.now()) / (60 * 1000)));
+        lines.push(`• \`${name}\`: High demand cooldown (${remainingMin}m remaining)`);
+      }
+
+      const out = lines.join('\n');
+      if (ctx.reply) await ctx.reply(out);
+      return { success: true, message: out };
+    }
+
+    // 3. ai forget <id>
     if (subCommand === 'forget' || subCommand === 'delete' || subCommand === 'remove') {
       const targetId = ctx.args[1];
       if (!targetId) {
@@ -60,14 +85,16 @@ export const aiCommand: CommandDefinition = {
       return { success: forgotten, message: resMsg };
     }
 
-    // 3. ai / ai test: Analyze current screen with Gemini 3.8 Flash Vision
+    // 4. ai / ai test: Analyze current screen with Gemini Vision
     const isTest = subCommand === 'test';
     if (ctx.reply) {
-      await ctx.reply(`🧠 Scanning screen with **Gemini 3.8 Flash Vision**...`);
+      await ctx.reply(`🧠 Scanning screen with **Gemini Vision**...`);
     }
 
     const result = await aiLearner.rescueWithGeminiAndLearn(adb, {
       customApiKey: config.geminiApiKey,
+      customModel: config.geminiModel,
+      currentAction: 'Manual AI screen scan requested via Discord',
       log: (msg, lvl) => ctx.log(msg, lvl || 'info')
     });
 

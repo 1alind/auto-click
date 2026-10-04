@@ -1047,9 +1047,11 @@ export class MacroManager {
                   // =========================================================================
                   const hasApiKey = Boolean(process.env.GEMINI_API_KEY || config.geminiApiKey);
                   if (hasApiKey) {
-                    ctx.log(`🤖 Step ${stepNumber} blocked — asking Gemini 3.8 Flash Vision to analyze unexpected prompt...`, 'info');
+                    ctx.log(`🤖 Step ${stepNumber} blocked — asking Gemini Vision to analyze unexpected prompt...`, 'info');
                     const aiRescue = await aiLearner.rescueWithGeminiAndLearn(adb, {
                       customApiKey: config.geminiApiKey,
+                      customModel: config.geminiModel,
+                      currentAction: `Executing macro "${macro.name}" step ${stepNumber}: looking for "${targetName}"`,
                       log: (msg, lvl) => ctx.log(msg, lvl || 'info')
                     });
 
@@ -1118,6 +1120,8 @@ export class MacroManager {
                 if (hasApiKey) {
                   const aiRescue = await aiLearner.rescueWithGeminiAndLearn(adb, {
                     customApiKey: config.geminiApiKey,
+                    customModel: config.geminiModel,
+                    currentAction: `Executing macro "${macro.name}" step ${stepNumber}: looking for "${targetName}"`,
                     log: (msg, lvl) => ctx.log(msg, lvl || 'info')
                   });
                   if (aiRescue.success && aiRescue.promptDetected && aiRescue.clickCoords) {
