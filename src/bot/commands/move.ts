@@ -7,6 +7,46 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let activeAcPollId = 0;
 
+// Multi-scale range covering 0.55x (heavily zoomed out) to 1.70x (heavily zoomed in)
+const WIDE_ZOOM_SCALES = [0.55, 0.65, 0.75, 0.85, 0.95, 1.0, 1.08, 1.20, 1.35, 1.50, 1.70];
+
+/**
+ * Searches for a template image with multi-scale zoom resilience.
+ * First tests the expanded expected region; if not found, falls back to full-screen search.
+ */
+async function matchWithZoomResilience(
+  rawScreen: any,
+  imagePath: string,
+  preferredRegion?: { minX: number; maxX: number; minY: number; maxY: number },
+  threshold = 0.65
+) {
+  if (preferredRegion) {
+    // 1. Try with expanded margin around preferred region
+    const marginX = 80;
+    const marginY = 80;
+    const expandedRegion = {
+      minX: Math.max(0, preferredRegion.minX - marginX),
+      maxX: preferredRegion.maxX + marginX,
+      minY: Math.max(0, preferredRegion.minY - marginY),
+      maxY: preferredRegion.maxY + marginY
+    };
+
+    const match = await TemplateMatcher.matchRaw(rawScreen, imagePath, {
+      region: expandedRegion,
+      threshold,
+      scales: WIDE_ZOOM_SCALES
+    });
+
+    if (match.found) return match;
+  }
+
+  // 2. Full-screen fallback search across all zoom scales
+  return await TemplateMatcher.matchRaw(rawScreen, imagePath, {
+    threshold: Math.max(0.60, threshold - 0.03),
+    scales: WIDE_ZOOM_SCALES
+  });
+}
+
 /**
  * Captures screenshot and sends to Discord whenever AC move gets stuck.
  */
@@ -37,17 +77,20 @@ async function sendFailureScreenshot(
 
 /**
  * Checks if travel timer digits/text exist in area 8-143 1832-1966.
+ * Uses an expanded crop window to reliably handle all zoom levels and button resizing.
  */
 async function checkTimerExistsInRegion(adb: any): Promise<{ exists: boolean; text: string }> {
   try {
     const screenPng = await adb.screencap();
     const screenImg = await Jimp.read(screenPng);
+    const screenW = screenImg.bitmap.width;
+    const screenH = screenImg.bitmap.height;
 
-    // Crop area 8-143 1832-1966
-    const cropX = Math.max(0, 8);
-    const cropY = Math.max(0, 1832);
-    const cropW = Math.max(10, 143 - cropX);
-    const cropH = Math.max(10, 1966 - cropY);
+    // Generous crop area around 0-260 1750-2050 to handle all zoom levels and button resizing
+    const cropX = Math.max(0, 0);
+    const cropY = Math.max(0, 1750);
+    const cropW = Math.min(280, screenW - cropX);
+    const cropH = Math.min(320, screenH - cropY);
 
     const cropped = screenImg.clone().crop({ x: cropX, y: cropY, w: cropW, h: cropH });
     cropped.resize({ w: cropW * 2, h: cropH * 2 });
@@ -66,7 +109,7 @@ async function checkTimerExistsInRegion(adb: any): Promise<{ exists: boolean; te
 
 export const moveCommand: CommandDefinition = {
   name: 'move',
-  description: 'Automates moving the Aircraft Carrier (AC) and checks arrival in the background.',
+  description: 'Automates moving the Aircraft Carrier (AC) with zoom resilience and arrival tracking.',
   usage: 'move  OR  move <up|down|left|right> [px]',
   aliases: ['moveac', 'acmove', 'relocate'],
 
@@ -115,27 +158,28 @@ export const moveCommand: CommandDefinition = {
     }
 
     let currentStep = 1;
-    ctx.log('🚀 Starting Aircraft Carrier (AC) Move sequence...', 'info');
+    ctx.log('🚀 Starting Aircraft Carrier (AC) Move sequence (with multi-scale zoom resilience)...', 'info');
 
     try {
       // =========================================================================
-      // STEP 1: Check area 20-94 455-529 for fleet.png
+      // STEP 1: Check area 20-94 455-529 for fleet.png (with multi-scale zoom search)
       // If NO -> click 939-1062 2175-2302. If YES -> ignore click.
       // =========================================================================
       currentStep = 1;
-      ctx.log('🔍 Step 1: Checking area 20-94 455-529 for fleet.png...', 'info');
+      ctx.log('🔍 Step 1: Checking area for fleet.png across zoom scales...', 'info');
       let rawScreen = await adb.screencapRaw();
       const fleetPath = resolveAutoclickImagePath('fleet.png');
 
       let fleetMatched = false;
       if (fleetPath) {
-        const match = await TemplateMatcher.matchRaw(rawScreen, fleetPath, {
-          region: { minX: 20, maxX: 94, minY: 455, maxY: 529 },
-          threshold: 0.72,
-          scales: [0.85, 1.0, 1.15]
-        });
+        const match = await matchWithZoomResilience(
+          rawScreen,
+          fleetPath,
+          { minX: 20, maxX: 94, minY: 455, maxY: 529 },
+          0.65
+        );
         fleetMatched = match.found;
-        ctx.log(`fleet.png match: ${match.found} (score: ${(match.score * 100).toFixed(1)}%)`, 'info');
+        ctx.log(`fleet.png match: ${match.found} (score: ${(match.score * 100).toFixed(1)}%, scale: ${match.scale}x)`, 'info');
       } else {
         ctx.log('⚠️ fleet.png not found on SD card, assuming not matched.', 'warn');
       }
@@ -187,10 +231,10 @@ export const moveCommand: CommandDefinition = {
       await sleep(600);
 
       // =========================================================================
-      // STEP 6: Search for acd1.png button and click it directly
+      // STEP 6: Search for acd1.png button across all zoom levels and click it directly
       // =========================================================================
       currentStep = 6;
-      ctx.log('🔍 Step 6: Searching for acd1.png button...', 'info');
+      ctx.log('🔍 Step 6: Searching for acd1.png button across all zoom scales...', 'info');
       rawScreen = await adb.screencapRaw();
       const acd1Path = resolveAutoclickImagePath('acd1.png');
 
@@ -199,28 +243,20 @@ export const moveCommand: CommandDefinition = {
       let tapY6 = 0;
 
       if (acd1Path) {
-        // Try region 460-669 1601-1645 first
-        let match1 = await TemplateMatcher.matchRaw(rawScreen, acd1Path, {
-          region: { minX: 460, maxX: 669, minY: 1601, maxY: 1645 },
-          threshold: 0.68,
-          scales: [0.85, 1.0, 1.15]
-        });
-
-        // If not found in narrow region, search entire screen
-        if (!match1.found) {
-          match1 = await TemplateMatcher.matchRaw(rawScreen, acd1Path, {
-            threshold: 0.68,
-            scales: [0.85, 1.0, 1.15]
-          });
-        }
+        const match1 = await matchWithZoomResilience(
+          rawScreen,
+          acd1Path,
+          { minX: 460, maxX: 669, minY: 1601, maxY: 1645 },
+          0.65
+        );
 
         if (match1.found) {
           acd1Matched = true;
           tapX6 = match1.targetPoint.x;
           tapY6 = match1.targetPoint.y;
-          ctx.log(`acd1.png button found at (${tapX6}, ${tapY6}) with score ${(match1.score * 100).toFixed(1)}%!`, 'info');
+          ctx.log(`acd1.png button found at (${tapX6}, ${tapY6}) with score ${(match1.score * 100).toFixed(1)}% (scale ${match1.scale}x)!`, 'info');
         } else {
-          ctx.log(`acd1.png match score ${(match1.score * 100).toFixed(1)}% (< 68%), skipping acd1 tap.`, 'info');
+          ctx.log(`acd1.png match score ${(match1.score * 100).toFixed(1)}% (< 65%), skipping acd1 tap.`, 'info');
         }
       } else {
         ctx.log('⚠️ acd1.png not found on SD card, skipping conditional tap.', 'warn');
@@ -237,10 +273,10 @@ export const moveCommand: CommandDefinition = {
       }
 
       // =========================================================================
-      // STEP 7: Verify 576-849 1407-1499 with acd2.png then click it
+      // STEP 7: Verify with acd2.png across all zoom levels then click it
       // =========================================================================
       currentStep = 7;
-      ctx.log('🔍 Step 7: Verifying 576-849 1407-1499 with acd2.png...', 'info');
+      ctx.log('🔍 Step 7: Verifying acd2.png across zoom scales...', 'info');
       rawScreen = await adb.screencapRaw();
       const acd2Path = resolveAutoclickImagePath('acd2.png');
 
@@ -248,17 +284,18 @@ export const moveCommand: CommandDefinition = {
       let tapY7 = Math.floor((1407 + 1499) / 2);
 
       if (acd2Path) {
-        const match2 = await TemplateMatcher.matchRaw(rawScreen, acd2Path, {
-          region: { minX: 576, maxX: 849, minY: 1407, maxY: 1499 },
-          threshold: 0.68,
-          scales: [0.85, 1.0, 1.15]
-        });
+        const match2 = await matchWithZoomResilience(
+          rawScreen,
+          acd2Path,
+          { minX: 576, maxX: 849, minY: 1407, maxY: 1499 },
+          0.65
+        );
         if (match2.found) {
           tapX7 = match2.targetPoint.x;
           tapY7 = match2.targetPoint.y;
-          ctx.log(`acd2.png verified! Matched at (${tapX7}, ${tapY7}) with score ${(match2.score * 100).toFixed(1)}%`, 'info');
+          ctx.log(`acd2.png verified! Matched at (${tapX7}, ${tapY7}) with score ${(match2.score * 100).toFixed(1)}% (scale ${match2.scale}x)`, 'info');
         } else {
-          ctx.log(`acd2.png match score ${(match2.score * 100).toFixed(1)}% (< 68%)`, 'warn');
+          ctx.log(`acd2.png match score ${(match2.score * 100).toFixed(1)}% (< 65%)`, 'warn');
         }
       }
 
@@ -272,10 +309,10 @@ export const moveCommand: CommandDefinition = {
       await sleep(500);
 
       // =========================================================================
-      // STEP 8: Verify 597-970 2181-2299 with acd3.png then click it
+      // STEP 8: Verify with acd3.png across all zoom levels then click it
       // =========================================================================
       currentStep = 8;
-      ctx.log('🔍 Step 8: Verifying 597-970 2181-2299 with acd3.png...', 'info');
+      ctx.log('🔍 Step 8: Verifying acd3.png across zoom scales...', 'info');
       rawScreen = await adb.screencapRaw();
       const acd3Path = resolveAutoclickImagePath('acd3.png');
 
@@ -283,17 +320,18 @@ export const moveCommand: CommandDefinition = {
       let tapY8 = Math.floor((2181 + 2299) / 2);
 
       if (acd3Path) {
-        const match3 = await TemplateMatcher.matchRaw(rawScreen, acd3Path, {
-          region: { minX: 597, maxX: 970, minY: 2181, maxY: 2299 },
-          threshold: 0.68,
-          scales: [0.85, 1.0, 1.15]
-        });
+        const match3 = await matchWithZoomResilience(
+          rawScreen,
+          acd3Path,
+          { minX: 597, maxX: 970, minY: 2181, maxY: 2299 },
+          0.65
+        );
         if (match3.found) {
           tapX8 = match3.targetPoint.x;
           tapY8 = match3.targetPoint.y;
-          ctx.log(`acd3.png verified! Matched at (${tapX8}, ${tapY8}) with score ${(match3.score * 100).toFixed(1)}%`, 'info');
+          ctx.log(`acd3.png verified! Matched at (${tapX8}, ${tapY8}) with score ${(match3.score * 100).toFixed(1)}% (scale ${match3.scale}x)`, 'info');
         } else {
-          ctx.log(`acd3.png match score ${(match3.score * 100).toFixed(1)}% (< 68%)`, 'warn');
+          ctx.log(`acd3.png match score ${(match3.score * 100).toFixed(1)}% (< 65%)`, 'warn');
         }
       }
 
@@ -313,12 +351,12 @@ export const moveCommand: CommandDefinition = {
       await sleep(2000);
 
       // =========================================================================
-      // STEP 10: Check area 8-143 1832-1966 for timer
+      // STEP 10: Check area for travel timer across zoom scales
       // If timer is NOT detected at all even at start -> send screenshot with step it stuck at!
       // If timer exists -> send "ac is moving" and poll every 10s until it disappears -> "arrived"
       // =========================================================================
       currentStep = 10;
-      ctx.log('⏱️ Step 10: Checking for travel timer in 8-143 1832-1966...', 'info');
+      ctx.log('⏱️ Step 10: Checking for travel timer across zoom levels...', 'info');
       let timerCheck = await checkTimerExistsInRegion(adb);
       if (!timerCheck.exists) {
         await sleep(1500);
