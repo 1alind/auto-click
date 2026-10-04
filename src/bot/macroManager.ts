@@ -711,8 +711,8 @@ export class MacroManager {
 
           const { fixacCommand } = await import('./commands/fixac');
           const fixacCtx: CommandContext = isManual
-            ? { ...manualReq!.ctx, args: ['--direct'] }
-            : { ...ctx, args: ['--silent', '--direct'], reply: undefined };
+            ? { ...manualReq!.ctx, args: ['--direct', '--during-start'] }
+            : { ...ctx, args: ['--silent', '--direct', '--during-start'], reply: undefined };
           const fixacResult = await fixacCommand.execute(fixacCtx);
 
           if (manualReq) {

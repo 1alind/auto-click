@@ -500,7 +500,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  app.listen(Number(PORT), '0.0.0.0', () => {
     if (!process.env.BOT_RESTARTED) {
       ConsoleLogger.started();
     }

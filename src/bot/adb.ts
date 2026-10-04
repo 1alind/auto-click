@@ -20,6 +20,7 @@ export interface TapResult {
   command: string;
   success: boolean;
   output?: string;
+  isSimulated?: boolean;
 }
 
 export class AdbController {
@@ -561,6 +562,37 @@ export class AdbController {
       const { stdout } = await execPromise(`adb ${adbTarget} shell input text "${escaped}"`);
       return { success: true, output: stdout.trim() };
     }
+  }
+
+  /**
+   * Gets the physical screen resolution via `adb shell wm size`.
+   * Defaults to 1080x2400 if unavailable.
+   */
+  public async getScreenSize(): Promise<{ width: number; height: number }> {
+    try {
+      const isAdb = await this.isAdbAvailable();
+      if (isAdb) {
+        let adbTarget = await this.resolveTargetFlag();
+        let stdout = '';
+        try {
+          const res = await execPromise(`adb ${adbTarget} shell wm size`);
+          stdout = res.stdout;
+        } catch {
+          adbTarget = await this.resolveTargetFlag(true);
+          const res = await execPromise(`adb ${adbTarget} shell wm size`);
+          stdout = res.stdout;
+        }
+        const match = stdout.match(/(?:Override|Physical) size:\s*(\d+)x(\d+)/i);
+        if (match) {
+          const w = parseInt(match[1], 10);
+          const h = parseInt(match[2], 10);
+          if (w > 0 && h > 0) return { width: w, height: h };
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return { width: 1080, height: 2400 };
   }
 
   /**

@@ -250,9 +250,12 @@ export const subCommand: CommandDefinition = {
       if (!webhook.isConfigured()) return;
       try {
         if (!statusMsgId) {
-          statusMsgId = await webhook.send({ content: text, waitForId: true });
+          const res = await webhook.send({ content: text });
+          if (res.success && res.messageId) {
+            statusMsgId = res.messageId;
+          }
         } else {
-          await webhook.editMessage(statusMsgId, { content: text });
+          await webhook.edit(statusMsgId, { content: text });
         }
       } catch {
         // ignore webhook errors

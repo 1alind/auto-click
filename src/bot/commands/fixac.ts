@@ -469,10 +469,20 @@ export async function findTextOnScreen(
 
 export const fixacCommand: CommandDefinition = {
   name: 'fixac',
-  description: 'Finds [TC]noob.that text & taps it, finds csg.png & taps it, then completes the 3-step repair sequence.',
+  description: 'Clicks 45-99 2010-2064, clicks 50-99 1875-1924, clicks 50x50 center, finds csg.png, clicks 311-774 2192-2281, 362-720 1874-1963, 33-122 91-170, and if during start: clicks 642-691 2075-2124, 256-757 935-1063, 577-890 1721-1810, and center 10x10 px.',
   usage: 'fixac',
 
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const { botManager } = await import('../botManager');
+    const { MacroManager } = await import('../macroManager');
+    const adb = botManager.getAdbController();
+    const webhook = botManager.getWebhookService();
+    const config = botManager.getConfig();
+    const isSilent = ctx.args.includes('--silent');
+    const isDirect = ctx.args.includes('--direct');
+    const isDuringStart = ctx.args.includes('--during-start') || MacroManager.isStartRunning();
+    const totalSteps = isDuringStart ? 11 : 7;
+
     const steps: StepLog[] = [];
     const recordStep = (
       stepNum: number,
@@ -490,22 +500,14 @@ export const fixacCommand: CommandDefinition = {
         data
       };
       steps.push(entry);
-      ctx.log(`[fixac ${stepNum}/5] ${title}: ${description}`, 'step', data);
+      ctx.log(`[fixac ${stepNum}/${totalSteps}] ${title}: ${description}`, 'step', data);
       if (ctx.notifyStep) {
         ctx.notifyStep(stepNum, title, description, status, data);
       }
     };
 
-    const { botManager } = await import('../botManager');
-    const adb = botManager.getAdbController();
-    const webhook = botManager.getWebhookService();
-    const config = botManager.getConfig();
-    const isSilent = ctx.args.includes('--silent');
-    const isDirect = ctx.args.includes('--direct');
-
     // If `start` is currently running and user manually sent `fixac`, pause `start` at the next boundary, run `fixac`, and continue `start`
     if (!isDirect) {
-      const { MacroManager } = await import('../macroManager');
       if (MacroManager.isStartRunning()) {
         if (webhook.isConfigured()) {
           await webhook
@@ -536,92 +538,59 @@ export const fixacCommand: CommandDefinition = {
     };
 
     ctx.log('🚀 Starting "fixac" sequence...', 'info');
-    await updateProgress('fixac: step 1 searching for `noob.png`...');
 
     // =========================================================================
-    // STEP 1: Find "noob.png" anywhere on screen and click it
+    // STEP 1: Click area 45-99 2010-2064
     // =========================================================================
-    recordStep(1, 'Find & Tap noob.png', 'Capturing raw screen in RAM and searching for "noob.png"...', 'running');
-    const rawScreen1 = await adb.screencapRaw();
-    const noobPath = resolveAutoclickImagePath('noob.png');
-
-    if (!noobPath) {
-      const errorMsg = `❌ Image "noob.png" not found on disk (/sdcard/autoclick/noob.png)!`;
-      ctx.log(errorMsg, 'error');
-      steps[steps.length - 1].status = 'failed';
-      if (!isSilent && webhook.isConfigured()) {
-        const png1 = await TemplateMatcher.cropRawToPng(rawScreen1);
-        await webhook.send({
-          content: errorMsg,
-          fileBuffer: png1,
-          fileName: 'fixac_missing_noob.png'
-        });
-      }
-      return { success: false, message: errorMsg, steps };
-    }
-
-    const s1W = rawScreen1.width;
-    const s1H = rawScreen1.height;
-
-    const effectiveThreshold = config.matchThreshold || 0.75;
-    // Search map area (excluding top resource bar and bottom chat/nav bar) for fast, accurate matching
-    const mapRegion = {
-      minX: 15,
-      maxX: s1W - 15,
-      minY: Math.floor(s1H * 0.06),
-      maxY: Math.floor(s1H * 0.88)
-    };
-
-    let noobMatch = await TemplateMatcher.matchRaw(rawScreen1, noobPath, {
-      scales: [0.85, 0.95, 1.0, 1.05, 1.15],
-      threshold: effectiveThreshold,
-      region: mapRegion
-    });
-
-    if (!noobMatch.found) {
-      const scorePct = (noobMatch.score * 100).toFixed(1);
-      const threshPct = (effectiveThreshold * 100).toFixed(0);
-      const errorMsg = `⚠️ Image "noob.png" NOT found in fixac step 1! Score: ${scorePct}% (< ${threshPct}%).`;
-      ctx.log(errorMsg, 'warn');
-      steps[steps.length - 1].status = 'failed';
-
-      if (!isSilent && webhook.isConfigured()) {
-        try {
-          const png1 = await TemplateMatcher.cropRawToPng(rawScreen1, mapRegion);
-          await webhook.send({
-            content: errorMsg,
-            fileBuffer: png1,
-            fileName: 'fixac_step1_not_found.png'
-          });
-        } catch {
-          // ignore
-        }
-      }
-      return { success: false, message: errorMsg, steps };
-    }
-
-    const textResult = {
-      found: true,
-      matchedText: 'noob.png',
-      box: noobMatch.box,
-      targetPoint: noobMatch.targetPoint,
-      executionTimeMs: noobMatch.executionTimeMs
-    };
-
-    const tap1 = await adb.tap(textResult.targetPoint.x, textResult.targetPoint.y);
+    await updateProgress('fixac: step 1 (clicking 45-99 2010-2064)...');
+    recordStep(1, 'Tap 45-99 2010-2064', 'Tapping area 45-99 2010-2064...', 'running');
+    const tap1 = await adb.tapRandomRange(45, 99, 2010, 2064);
     steps[steps.length - 1].status = 'completed';
-    steps[steps.length - 1].description = `Matched noob.png (${(noobMatch.score * 100).toFixed(1)}%) at (${textResult.targetPoint.x}, ${textResult.targetPoint.y}) in ${textResult.executionTimeMs}ms & tapped`;
-    await updateProgress(`fixac: step 1 clicked \`noob.png\` (${(noobMatch.score * 100).toFixed(1)}%) at (${tap1.x}, ${tap1.y})`);
+    steps[steps.length - 1].description = `Tapped (${tap1.x}, ${tap1.y}) in 45-99 2010-2064`;
+    await updateProgress(`fixac: step 1 clicked (${tap1.x}, ${tap1.y})`);
 
     // Wait 0.5s
     await sleep(500);
 
     // =========================================================================
-    // STEP 2: Find image "csg.png" (around the right side of the text) and click it
+    // STEP 2: Click area 50-99 1875-1924
     // =========================================================================
-    await updateProgress('fixac: step 2 searching for `csg.png`...');
-    recordStep(2, 'Find & Tap csg.png', 'Capturing raw screen in RAM and searching for csg.png...', 'running');
-    const rawScreen2 = await adb.screencapRaw();
+    await updateProgress('fixac: step 2 (clicking 50-99 1875-1924)...');
+    recordStep(2, 'Tap 50-99 1875-1924', 'Tapping area 50-99 1875-1924...', 'running');
+    const tap2 = await adb.tapRandomRange(50, 99, 1875, 1924);
+    steps[steps.length - 1].status = 'completed';
+    steps[steps.length - 1].description = `Tapped (${tap2.x}, ${tap2.y}) in 50-99 1875-1924`;
+    await updateProgress(`fixac: step 2 clicked (${tap2.x}, ${tap2.y})`);
+
+    // Wait 0.5s
+    await sleep(500);
+
+    // =========================================================================
+    // STEP 3: Click center of screen 50x50 px
+    // =========================================================================
+    await updateProgress('fixac: step 3 (clicking center 50x50 px)...');
+    recordStep(3, 'Tap Center 50x50 px', 'Calculating screen center and tapping 50x50 px...', 'running');
+    const { width: screenW, height: screenH } = await adb.getScreenSize();
+    const centerX = Math.floor(screenW / 2);
+    const centerY = Math.floor(screenH / 2);
+    const midMinX = centerX - 25;
+    const midMaxX = centerX + 25;
+    const midMinY = centerY - 25;
+    const midMaxY = centerY + 25;
+    const tap3 = await adb.tapRandomRange(midMinX, midMaxX, midMinY, midMaxY);
+    steps[steps.length - 1].status = 'completed';
+    steps[steps.length - 1].description = `Tapped (${tap3.x}, ${tap3.y}) in center ${midMinX}-${midMaxX} ${midMinY}-${midMaxY}`;
+    await updateProgress(`fixac: step 3 clicked center (${tap3.x}, ${tap3.y})`);
+
+    // Wait 0.5s
+    await sleep(500);
+
+    // =========================================================================
+    // STEP 4: Find image "csg.png" and click it
+    // =========================================================================
+    await updateProgress('fixac: step 4 searching for `csg.png`...');
+    recordStep(4, 'Find & Tap csg.png', 'Capturing raw screen in RAM and searching for csg.png...', 'running');
+    let rawScreenCsg = await adb.screencapRaw();
     const csgPath = resolveAutoclickImagePath('csg.png');
 
     if (!csgPath) {
@@ -629,34 +598,26 @@ export const fixacCommand: CommandDefinition = {
       ctx.log(errorMsg, 'error');
       steps[steps.length - 1].status = 'failed';
       if (!isSilent && webhook.isConfigured()) {
-        const png2 = await TemplateMatcher.cropRawToPng(rawScreen2);
+        const png = await TemplateMatcher.cropRawToPng(rawScreenCsg);
         await webhook.send({
           content: errorMsg,
-          fileBuffer: png2,
+          fileBuffer: png,
           fileName: 'fixac_missing_csg.png'
         });
       }
       return { success: false, message: errorMsg, steps };
     }
 
-    const sw = rawScreen2.width;
-    const sh = rawScreen2.height;
-
-    const rightSideRegion = {
-      minX: Math.max(0, textResult.box.x - 40),
-      maxX: Math.min(sw, textResult.box.x + textResult.box.width + 450),
-      minY: Math.max(0, textResult.box.y - 300),
-      maxY: Math.min(sh, textResult.box.y + textResult.box.height + 300)
-    };
-
-    let csgMatch = await TemplateMatcher.matchRaw(rawScreen2, csgPath, {
+    const effectiveThreshold = config.matchThreshold || 0.75;
+    let csgMatch = await TemplateMatcher.matchRaw(rawScreenCsg, csgPath, {
       scales: [0.7, 0.85, 1.0, 1.15, 1.3],
-      threshold: effectiveThreshold,
-      region: rightSideRegion
+      threshold: effectiveThreshold
     });
 
     if (!csgMatch.found) {
-      csgMatch = await TemplateMatcher.matchRaw(rawScreen2, csgPath, {
+      await sleep(500);
+      rawScreenCsg = await adb.screencapRaw();
+      csgMatch = await TemplateMatcher.matchRaw(rawScreenCsg, csgPath, {
         scales: [0.7, 0.85, 1.0, 1.15, 1.3],
         threshold: effectiveThreshold
       });
@@ -665,13 +626,13 @@ export const fixacCommand: CommandDefinition = {
     if (!csgMatch.found) {
       const scorePct = (csgMatch.score * 100).toFixed(1);
       const threshPct = (effectiveThreshold * 100).toFixed(0);
-      const errorMsg = `❌ Image "csg.png" NOT found in fixac step 2! Score: ${scorePct}% (< ${threshPct}%). Stopping script.`;
+      const errorMsg = `❌ Image "csg.png" NOT found in fixac step 4! Score: ${scorePct}% (< ${threshPct}%). Stopping script.`;
       ctx.log(errorMsg, 'error');
       steps[steps.length - 1].status = 'failed';
 
       if (!isSilent && webhook.isConfigured()) {
         try {
-          const croppedBuf = await TemplateMatcher.cropRawToPng(rawScreen2, rightSideRegion);
+          const croppedBuf = await TemplateMatcher.cropRawToPng(rawScreenCsg);
           await webhook.send({
             content: errorMsg,
             fileBuffer: croppedBuf,
@@ -685,40 +646,90 @@ export const fixacCommand: CommandDefinition = {
       return { success: false, message: errorMsg, steps };
     }
 
-    const tap2 = await adb.tap(csgMatch.targetPoint.x, csgMatch.targetPoint.y);
+    const tap4 = await adb.tap(csgMatch.targetPoint.x, csgMatch.targetPoint.y);
     steps[steps.length - 1].status = 'completed';
-    steps[steps.length - 1].description = `Matched csg.png (${(csgMatch.score * 100).toFixed(1)}%) & tapped (${tap2.x}, ${tap2.y})`;
-    await updateProgress(`fixac: step 2 clicked \`csg.png\` (${(csgMatch.score * 100).toFixed(1)}%)`);
+    steps[steps.length - 1].description = `Matched csg.png (${(csgMatch.score * 100).toFixed(1)}%) & tapped (${tap4.x}, ${tap4.y})`;
+    await updateProgress(`fixac: step 4 clicked \`csg.png\` (${(csgMatch.score * 100).toFixed(1)}%) at (${tap4.x}, ${tap4.y})`);
 
     // Wait 0.5s
     await sleep(500);
 
     // =========================================================================
-    // STEP 3: Click area 311-774 2192-2281
-    // =========================================================================
-    await updateProgress('fixac: step 3');
-    const tap3 = await adb.tapRandomRange(311, 774, 2192, 2281);
-    recordStep(3, 'Tap 311-774 2192-2281', `Tapped (${tap3.x}, ${tap3.y})`, 'completed', { coords: tap3 });
-
-    // Wait 0.5s
-    await sleep(500);
-
-    // =========================================================================
-    // STEP 4: Click area 362-720 1874-1963
-    // =========================================================================
-    await updateProgress('fixac: step 4');
-    const tap4 = await adb.tapRandomRange(362, 720, 1874, 1963);
-    recordStep(4, 'Tap 362-720 1874-1963', `Tapped (${tap4.x}, ${tap4.y})`, 'completed', { coords: tap4 });
-
-    // Wait 0.5s
-    await sleep(500);
-
-    // =========================================================================
-    // STEP 5: Click area 33-122 91-170
+    // STEP 5: Click area 311-774 2192-2281
     // =========================================================================
     await updateProgress('fixac: step 5');
-    const tap5 = await adb.tapRandomRange(33, 122, 91, 170);
-    recordStep(5, 'Tap 33-122 91-170', `Tapped (${tap5.x}, ${tap5.y})`, 'completed', { coords: tap5 });
+    const tap5 = await adb.tapRandomRange(311, 774, 2192, 2281);
+    recordStep(5, 'Tap 311-774 2192-2281', `Tapped (${tap5.x}, ${tap5.y})`, 'completed', { coords: tap5 });
+
+    // Wait 0.5s
+    await sleep(500);
+
+    // =========================================================================
+    // STEP 6: Click area 362-720 1874-1963
+    // =========================================================================
+    await updateProgress('fixac: step 6');
+    const tap6 = await adb.tapRandomRange(362, 720, 1874, 1963);
+    recordStep(6, 'Tap 362-720 1874-1963', `Tapped (${tap6.x}, ${tap6.y})`, 'completed', { coords: tap6 });
+
+    // Wait 0.5s
+    await sleep(500);
+
+    // =========================================================================
+    // STEP 7: Click area 33-122 91-170
+    // =========================================================================
+    await updateProgress('fixac: step 7');
+    const tap7 = await adb.tapRandomRange(33, 122, 91, 170);
+    recordStep(7, 'Tap 33-122 91-170', `Tapped (${tap7.x}, ${tap7.y})`, 'completed', { coords: tap7 });
+
+    // If running during `start` cycle/circle, perform additional steps 8-11
+    if (isDuringStart) {
+      // Wait 0.5s
+      await sleep(500);
+
+      // =========================================================================
+      // STEP 8: Click area 642-691 2075-2124
+      // =========================================================================
+      await updateProgress('fixac: step 8 (clicking 642-691 2075-2124)...');
+      const tap8 = await adb.tapRandomRange(642, 691, 2075, 2124);
+      recordStep(8, 'Tap 642-691 2075-2124', `Tapped (${tap8.x}, ${tap8.y})`, 'completed', { coords: tap8 });
+
+      // Wait 0.5s
+      await sleep(500);
+
+      // =========================================================================
+      // STEP 9: Click area 256-757 935-1063
+      // =========================================================================
+      await updateProgress('fixac: step 9 (clicking 256-757 935-1063)...');
+      const tap9 = await adb.tapRandomRange(256, 757, 935, 1063);
+      recordStep(9, 'Tap 256-757 935-1063', `Tapped (${tap9.x}, ${tap9.y})`, 'completed', { coords: tap9 });
+
+      // Wait 0.5s
+      await sleep(500);
+
+      // =========================================================================
+      // STEP 10: Click area 577-890 1721-1810
+      // =========================================================================
+      await updateProgress('fixac: step 10 (clicking 577-890 1721-1810)...');
+      const tap10 = await adb.tapRandomRange(577, 890, 1721, 1810);
+      recordStep(10, 'Tap 577-890 1721-1810', `Tapped (${tap10.x}, ${tap10.y})`, 'completed', { coords: tap10 });
+
+      // Wait 0.5s
+      await sleep(500);
+
+      // =========================================================================
+      // STEP 11: Click center of screen 10x10 px
+      // =========================================================================
+      await updateProgress('fixac: step 11 (clicking center 10x10 px)...');
+      const { width: sW, height: sH } = await adb.getScreenSize();
+      const cX = Math.floor(sW / 2);
+      const cY = Math.floor(sH / 2);
+      const cMinX = cX - 5;
+      const cMaxX = cX + 5;
+      const cMinY = cY - 5;
+      const cMaxY = cY + 5;
+      const tap11 = await adb.tapRandomRange(cMinX, cMaxX, cMinY, cMaxY);
+      recordStep(11, 'Tap Center 10x10 px', `Tapped center (${tap11.x}, ${tap11.y}) in ${cMinX}-${cMaxX} ${cMinY}-${cMaxY}`, 'completed', { coords: tap11 });
+    }
 
     await updateProgress('fixac: completed ✅');
     ctx.log('✅ "fixac" sequence completed successfully!', 'info');

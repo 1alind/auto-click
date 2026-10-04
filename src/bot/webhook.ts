@@ -81,7 +81,7 @@ export class WebhookService {
       if (options.fileBuffer) {
         const formData = new FormData();
         const fileName = options.fileName || `cropped_${Date.now()}.png`;
-        const blob = new Blob([options.fileBuffer], { type: 'image/png' });
+        const blob = new Blob([new Uint8Array(options.fileBuffer)], { type: 'image/png' });
         formData.append('files[0]', blob, fileName);
 
         const payloadJson: any = {
@@ -154,7 +154,7 @@ export class WebhookService {
       if (options.fileBuffer) {
         const formData = new FormData();
         const fileName = options.fileName || `cropped_${Date.now()}.png`;
-        const blob = new Blob([options.fileBuffer], { type: 'image/png' });
+        const blob = new Blob([new Uint8Array(options.fileBuffer)], { type: 'image/png' });
         formData.append('files[0]', blob, fileName);
 
         const payloadJson: any = {

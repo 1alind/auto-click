@@ -12,6 +12,7 @@ export interface BotConfig {
   githubToken?: string; // GitHub Personal Access Token (for private repos)
   updateCheckIntervalMinutes: number; // e.g. 15 minutes
   autoRestartOnCrash: boolean;
+  useSimulatorFallback?: boolean;
 }
 
 export interface MatchBoundingBox {

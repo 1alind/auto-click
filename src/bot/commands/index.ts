@@ -1197,13 +1197,20 @@ const COMMAND_MANUALS: Record<string, string> = {
   ].join('\n'),
 
   fixac: [
-    '**fixac** — Automated 5-step `[TC]noob.that` & `csg.png` sequence',
+    '**fixac** — Automated repair sequence with `csg.png` (7 steps standalone, 11 steps during `start` cycle)',
     'usage: `fixac`',
-    '1. Finds text `[TC]noob.that` on screen & taps it (waits 0.5s)',
-    '2. Finds `csg.png` (around right side of text) & taps it (waits 0.5s)',
-    '3. Taps random point in X=311–774, Y=2192–2281 (waits 0.5s)',
-    '4. Taps random point in X=362–720, Y=1874–1963 (waits 0.5s)',
-    '5. Taps random point in X=33–122, Y=91–170'
+    '1. Taps random point in X=45–99, Y=2010–2064 (waits 0.5s)',
+    '2. Taps random point in X=50–99, Y=1875–1924 (waits 0.5s)',
+    '3. Taps 50x50 px center of screen (waits 0.5s)',
+    '4. Finds `csg.png` on screen & taps it (waits 0.5s)',
+    '5. Taps random point in X=311–774, Y=2192–2281 (waits 0.5s)',
+    '6. Taps random point in X=362–720, Y=1874–1963 (waits 0.5s)',
+    '7. Taps random point in X=33–122, Y=91–170',
+    '*(If running during `start` cycle)*:',
+    '8. Taps random point in X=642–691, Y=2075–2124 (waits 0.5s)',
+    '9. Taps random point in X=256–757, Y=935–1063 (waits 0.5s)',
+    '10. Taps random point in X=577–890, Y=1721–1810 (waits 0.5s)',
+    '11. Taps 10x10 px center of screen (waits 0.5s)'
   ].join('\n'),
 
   test: [
