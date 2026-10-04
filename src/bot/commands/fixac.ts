@@ -469,7 +469,7 @@ export async function findTextOnScreen(
 
 export const fixacCommand: CommandDefinition = {
   name: 'fixac',
-  description: 'Clicks 45-99 2010-2064, clicks 50-99 1875-1924, clicks 50x50 center, finds csg.png, clicks 311-774 2192-2281, 362-720 1874-1963, 33-122 91-170, and if during start: clicks 642-691 2075-2124, 256-757 935-1063, 577-890 1721-1810, and center 10x10 px.',
+  description: 'Clicks 45-99 2010-2064, clicks 50-99 1875-1924, clicks 50x50 center, finds csg.png, clicks 311-774 2192-2281, 362-720 1874-1963, 33-122 91-170, and if during start: clicks 642-691 2075-2124, 127-269 801-886, 256-757 935-1063, 577-890 1721-1810, and center 10x10 px.',
   usage: 'fixac',
 
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
@@ -481,7 +481,7 @@ export const fixacCommand: CommandDefinition = {
     const isSilent = ctx.args.includes('--silent');
     const isDirect = ctx.args.includes('--direct');
     const isDuringStart = ctx.args.includes('--during-start') || MacroManager.isStartRunning();
-    const totalSteps = isDuringStart ? 11 : 7;
+    const totalSteps = isDuringStart ? 12 : 7;
 
     const steps: StepLog[] = [];
     const recordStep = (
@@ -697,29 +697,39 @@ export const fixacCommand: CommandDefinition = {
       await sleep(500);
 
       // =========================================================================
-      // STEP 9: Click area 256-757 935-1063
+      // STEP 9: Click area 127-269 801-886
       // =========================================================================
-      await updateProgress('fixac: step 9 (clicking 256-757 935-1063)...');
-      const tap9 = await adb.tapRandomRange(256, 757, 935, 1063);
-      recordStep(9, 'Tap 256-757 935-1063', `Tapped (${tap9.x}, ${tap9.y})`, 'completed', { coords: tap9 });
+      await updateProgress('fixac: step 9 (clicking 127-269 801-886)...');
+      const tap9 = await adb.tapRandomRange(127, 269, 801, 886);
+      recordStep(9, 'Tap 127-269 801-886', `Tapped (${tap9.x}, ${tap9.y})`, 'completed', { coords: tap9 });
 
       // Wait 0.5s
       await sleep(500);
 
       // =========================================================================
-      // STEP 10: Click area 577-890 1721-1810
+      // STEP 10: Click area 256-757 935-1063
       // =========================================================================
-      await updateProgress('fixac: step 10 (clicking 577-890 1721-1810)...');
-      const tap10 = await adb.tapRandomRange(577, 890, 1721, 1810);
-      recordStep(10, 'Tap 577-890 1721-1810', `Tapped (${tap10.x}, ${tap10.y})`, 'completed', { coords: tap10 });
+      await updateProgress('fixac: step 10 (clicking 256-757 935-1063)...');
+      const tap10 = await adb.tapRandomRange(256, 757, 935, 1063);
+      recordStep(10, 'Tap 256-757 935-1063', `Tapped (${tap10.x}, ${tap10.y})`, 'completed', { coords: tap10 });
 
       // Wait 0.5s
       await sleep(500);
 
       // =========================================================================
-      // STEP 11: Click center of screen 10x10 px
+      // STEP 11: Click area 577-890 1721-1810
       // =========================================================================
-      await updateProgress('fixac: step 11 (clicking center 10x10 px)...');
+      await updateProgress('fixac: step 11 (clicking 577-890 1721-1810)...');
+      const tap11 = await adb.tapRandomRange(577, 890, 1721, 1810);
+      recordStep(11, 'Tap 577-890 1721-1810', `Tapped (${tap11.x}, ${tap11.y})`, 'completed', { coords: tap11 });
+
+      // Wait 0.5s
+      await sleep(500);
+
+      // =========================================================================
+      // STEP 12: Click center of screen 10x10 px
+      // =========================================================================
+      await updateProgress('fixac: step 12 (clicking center 10x10 px)...');
       const { width: sW, height: sH } = await adb.getScreenSize();
       const cX = Math.floor(sW / 2);
       const cY = Math.floor(sH / 2);
@@ -727,8 +737,8 @@ export const fixacCommand: CommandDefinition = {
       const cMaxX = cX + 5;
       const cMinY = cY - 5;
       const cMaxY = cY + 5;
-      const tap11 = await adb.tapRandomRange(cMinX, cMaxX, cMinY, cMaxY);
-      recordStep(11, 'Tap Center 10x10 px', `Tapped center (${tap11.x}, ${tap11.y}) in ${cMinX}-${cMaxX} ${cMinY}-${cMaxY}`, 'completed', { coords: tap11 });
+      const tap12 = await adb.tapRandomRange(cMinX, cMaxX, cMinY, cMaxY);
+      recordStep(12, 'Tap Center 10x10 px', `Tapped center (${tap12.x}, ${tap12.y}) in ${cMinX}-${cMaxX} ${cMinY}-${cMaxY}`, 'completed', { coords: tap12 });
     }
 
     await updateProgress('fixac: completed ✅');
