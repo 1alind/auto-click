@@ -178,12 +178,12 @@ export const moveCommand: CommandDefinition = {
       await sleep(500);
 
       // =========================================================================
-      // STEP 5: Click 236-325 1455-1544
+      // STEP 5: Click fixed location (230, 1520) before acd1 step
       // =========================================================================
       currentStep = 5;
-      ctx.log('👉 Step 5: Clicking 236-325 1455-1544...', 'info');
-      const tap5 = await adb.tapRandomRange(236, 325, 1455, 1544);
-      ctx.log(`Tapped (${tap5.x}, ${tap5.y}) in 236-325 1455-1544`, 'info');
+      ctx.log('👉 Step 5: Clicking fixed location (230, 1520)...', 'info');
+      const tap5 = await adb.tap(230, 1520);
+      ctx.log(`Tapped (${tap5.x}, ${tap5.y}) at fixed position (230, 1520)`, 'info');
       await sleep(600);
 
       // =========================================================================

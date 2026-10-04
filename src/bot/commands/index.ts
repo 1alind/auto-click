@@ -1230,7 +1230,7 @@ const COMMAND_MANUALS: Record<string, string> = {
     '2. Clicks 644-688 2075-2119',
     '3. Clicks 278-685 951-1047',
     '4. Clicks 595-880 1723-1807',
-    '5. Clicks 236-325 1455-1544',
+    '5. Clicks fixed location 230 1520',
     '6. Searches for `acd1.png` button and clicks it directly at its detected position',
     '7. Verifies 576-849 1407-1499 with `acd2.png` and clicks it',
     '8. Verifies 597-970 2181-2299 with `acd3.png` and clicks it',
