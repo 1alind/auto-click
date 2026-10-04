@@ -1235,7 +1235,7 @@ const COMMAND_MANUALS: Record<string, string> = {
     '7. Verifies 576-849 1407-1499 with `acd2.png` and clicks it',
     '8. Verifies 597-970 2181-2299 with `acd3.png` and clicks it',
     '9. Waits 2 seconds',
-    '10. Scans texts in 8-143 1832-1966 for timer, sends "ac will be areive in ...", and sends "arrived." when done'
+    '10. Checks 8-143 1832-1966 for timer; if exists sends "ac is moving", polls every 10s in background until timer disappears, then updates message to "arrived"'
   ].join('\n'),
 
   test: [
