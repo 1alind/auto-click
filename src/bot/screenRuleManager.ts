@@ -327,6 +327,47 @@ export class ScreenRuleManager {
   }
 
   /**
+   * Fast, dedicated detector that checks if "Launch Formation" header is currently on screen (~30ms)
+   */
+  public static async isLaunchFormationScreen(
+    adb: AdbController,
+    screenPngBuffer?: Buffer
+  ): Promise<boolean> {
+    try {
+      const pngBuf = screenPngBuffer || (await adb.screencap());
+      const cropped = await TemplateMatcher.cropRegion(pngBuf, 100, 60, 980, 240);
+      const cropOcr = await recognizeLinesWithTimeout(cropped.buffer, 100, 60, 1, 3000);
+      const text = (cropOcr.fullText || cropOcr.lines.map((l) => l.text).join(' ')).toLowerCase();
+
+      const keywords = ['launch', 'formation', 'laun', 'formati', 'aunch', 'ormat', 'launch formation', 'launchformation'];
+      const matched = keywords.some((kw) => text.includes(kw));
+      return matched;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Dismisses Launch Formation by tapping Back button (36-115, 94-173), waiting 500ms,
+   * then tapping Center / RAB (465-602, 1109-1223), and waiting 500ms
+   */
+  public static async dismissLaunchFormation(adb: AdbController, ctx?: CommandContext): Promise<boolean> {
+    try {
+      ctx?.log?.('🛡️ Launch Formation detected! Tapping Back button (36-115, 94-173) then Center (RAB)...', 'info');
+      // 1. Tap Back button
+      await adb.tapRandomRange(36, 115, 94, 173);
+      await new Promise((r) => setTimeout(r, 500));
+      // 2. Tap Center of Screen (RAB)
+      await adb.tapRandomRange(465, 602, 1109, 1223);
+      await new Promise((r) => setTimeout(r, 500));
+      return true;
+    } catch (err: any) {
+      console.warn('[ScreenRuleManager] Failed to dismiss Launch Formation:', err.message);
+      return false;
+    }
+  }
+
+  /**
    * When an unknown screen or missing image blocks a macro:
    * 1. Captures a full-screen screenshot
    * 2. Sends the failure alert and screenshot image to Discord

@@ -4,7 +4,7 @@ import os from 'os';
 import { CommandContext, CommandResult, StepLog } from './types';
 import { TemplateMatcher } from './matcher';
 import { RefImageManager } from './refImage';
-import { screenRuleManager } from './screenRuleManager';
+import { screenRuleManager, ScreenRuleManager } from './screenRuleManager';
 import { StoragePaths } from './storagePaths';
 
 export type MacroActionType =
@@ -657,6 +657,18 @@ export class MacroManager {
       // Check for stop or 5-6m fixac interval right before Step 1, Step 7, Step 13, or Step 19 (process boundaries)
       if (isStopBoundary) {
         if (isStartMacro) {
+          // Check if Launch Formation screen is already open before tapping RAB
+          const screenPng = await TemplateMatcher.cropRawToPng(await adb.screencapRaw());
+          const isLF = await ScreenRuleManager.isLaunchFormationScreen(adb, screenPng);
+          if (isLF) {
+            await ScreenRuleManager.dismissLaunchFormation(adb, ctx);
+            const roundIndex = Math.min(3, Math.floor(i / 6));
+            const roundBaseStepIdx = roundIndex * 6;
+            const roundAsBtnStepIdx = roundBaseStepIdx + 2;
+            i = roundAsBtnStepIdx - 1; // Proceed directly to asbtn.png
+            continue;
+          }
+
           this.saveStartState({
             isRunning: true,
             autoFixacEnabled,
@@ -897,6 +909,16 @@ export class MacroManager {
               } else if (isStartMacro) {
                 // 1. Check screen rules FIRST (e.g. Launch Formation screen or unexpected modal)
                 const screenPng = await TemplateMatcher.cropRawToPng(rawScreen);
+                const isLF = await ScreenRuleManager.isLaunchFormationScreen(adb, screenPng);
+                if (isLF) {
+                  await ScreenRuleManager.dismissLaunchFormation(adb, ctx);
+                  const roundIndex = Math.min(3, Math.floor(i / 6));
+                  const roundBaseStepIdx = roundIndex * 6;
+                  const roundAsBtnStepIdx = roundBaseStepIdx + 2;
+                  i = roundAsBtnStepIdx - 1;
+                  continue;
+                }
+
                 const earlyRuleCheck = await screenRuleManager.checkAndExecuteRule(adb, screenPng);
                 if (earlyRuleCheck.matched && earlyRuleCheck.rule) {
                   lastRescuedStep = i;
