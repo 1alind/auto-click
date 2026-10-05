@@ -4,6 +4,7 @@ import os from 'os';
 import { Jimp } from 'jimp';
 import { CommandDefinition, CommandContext, CommandResult, StepLog, MatchBoundingBox } from '../types';
 import { TemplateMatcher } from '../matcher';
+import { StoragePaths } from '../storagePaths';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -83,27 +84,7 @@ export async function recognizeLinesWithTimeout(
 }
 
 export function resolveAutoclickImagePath(imageName: string): string | null {
-  const clean = imageName.trim();
-  const homeDir = process.env.HOME || os.homedir() || '';
-  const sharedDirs = [
-    path.resolve(homeDir, 'storage/shared/autoclick'),
-    '/sdcard/autoclick',
-    '/storage/emulated/0/autoclick',
-    process.cwd()
-  ];
-
-  const hasExt = /\.[a-z0-9]+$/i.test(clean);
-  const fileVariants = hasExt ? [clean] : [clean, `${clean}.png`, `${clean}.jpg`, `${clean}.jpeg`];
-
-  for (const dir of sharedDirs) {
-    for (const variant of fileVariants) {
-      const candidate = path.resolve(dir, variant);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return null;
+  return StoragePaths.resolveImage(imageName);
 }
 
 export interface DetectedTextRegion {

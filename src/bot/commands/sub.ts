@@ -6,6 +6,7 @@ import { CommandDefinition, CommandContext, CommandResult, StepLog } from '../ty
 import { TemplateMatcher } from '../matcher';
 import { recognizeLinesWithTimeout, OcrLineResult } from './fixac';
 import { captureCleanErrorScreenshot } from '../macroManager';
+import { StoragePaths } from '../storagePaths';
 
 export type SubOption = 'normal' | 'red' | 'gold';
 
@@ -41,27 +42,7 @@ async function interruptibleSleep(totalMs: number): Promise<boolean> {
 }
 
 function resolveAutoclickImagePath(imageName: string): string | null {
-  const clean = imageName.trim();
-  const homeDir = process.env.HOME || os.homedir() || '';
-  const sharedDirs = [
-    path.resolve(homeDir, 'storage/shared/autoclick'),
-    '/sdcard/autoclick',
-    '/storage/emulated/0/autoclick',
-    process.cwd()
-  ];
-
-  const hasExt = /\.[a-z0-9]+$/i.test(clean);
-  const fileVariants = hasExt ? [clean] : [clean, `${clean}.png`, `${clean}.jpg`, `${clean}.jpeg`];
-
-  for (const dir of sharedDirs) {
-    for (const variant of fileVariants) {
-      const candidate = path.resolve(dir, variant);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return null;
+  return StoragePaths.resolveImage(imageName);
 }
 
 function isTextPixel(r: number, g: number, b: number): boolean {

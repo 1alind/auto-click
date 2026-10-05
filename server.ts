@@ -9,6 +9,8 @@ import { TemplateMatcher } from './src/bot/matcher';
 import { ConsoleLogger } from './src/bot/consoleLogger';
 import { LiveController, LIVE_PORT } from './src/bot/liveController';
 import { MacroManager } from './src/bot/macroManager';
+import { screenRuleManager } from './src/bot/screenRuleManager';
+import { StoragePaths } from './src/bot/storagePaths';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -475,23 +477,7 @@ async function startServer() {
         height: Math.max(1, highY - lowY)
       };
 
-      const homeDir = process.env.HOME || os.homedir() || '';
-      const sharedDirs = [
-        path.resolve(homeDir, 'storage/shared/autoclick'),
-        '/sdcard/autoclick',
-        '/storage/emulated/0/autoclick'
-      ];
-      let targetDir = sharedDirs[0];
-      for (const dir of sharedDirs) {
-        if (fs.existsSync(dir) || fs.existsSync(path.dirname(dir))) {
-          targetDir = dir;
-          break;
-        }
-      }
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
-
+      const targetDir = StoragePaths.getImagesDir();
       const fullSavePath = path.join(targetDir, savedFileName);
       await fs.promises.writeFile(fullSavePath, cropped.buffer);
       botManager.addLog(`💾 [Live Crop] Saved ${savedFileName} (${cropped.width}x${cropped.height}) to ${fullSavePath}`, 'info');
@@ -502,6 +488,112 @@ async function startServer() {
         path: fullSavePath,
         width: cropped.width,
         height: cropped.height
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Screen Rules (Zero AI Prompt & Screen Handlers)
+  app.get('/api/screen-rules', (_req, res) => {
+    try {
+      const rules = screenRuleManager.getRules();
+      const latestPending = screenRuleManager.getLatestPendingScreen();
+      res.json({
+        success: true,
+        rules,
+        storageDir: screenRuleManager.getStorageDir(),
+        latestPending: latestPending
+          ? {
+              id: latestPending.id,
+              keywords: latestPending.keywords,
+              ocrSnippet: latestPending.ocrSnippet,
+              macroName: latestPending.macroName,
+              stepNumber: latestPending.stepNumber,
+              timestamp: latestPending.timestamp,
+              screenshotBase64: latestPending.screenshotBuffer.toString('base64')
+            }
+          : null
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  app.post('/api/screen-rules/set', (req, res) => {
+    try {
+      const { id, action, keywords, snippet } = req.body;
+      if (!id || !action || !action.type) {
+        return res.status(400).json({ success: false, message: 'id and action.type are required' });
+      }
+      const rule = screenRuleManager.setRule(id, action, { keywords, snippet });
+      res.json({ success: true, rule });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  app.post('/api/screen-rules/rename', (req, res) => {
+    try {
+      const { oldId, newId } = req.body;
+      if (!oldId || !newId) {
+        return res.status(400).json({ success: false, message: 'oldId and newId are required' });
+      }
+      const result = screenRuleManager.renameRule(oldId, newId);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  app.post('/api/screen-rules/pending-id', (req, res) => {
+    try {
+      const { newId } = req.body;
+      if (!newId) {
+        return res.status(400).json({ success: false, message: 'newId is required' });
+      }
+      const ok = screenRuleManager.setPendingId(newId);
+      res.json({ success: ok });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  app.delete('/api/screen-rules/:id', (req, res) => {
+    try {
+      const deleted = screenRuleManager.deleteRule(req.params.id);
+      res.json({ success: deleted });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  app.post('/api/screen-rules/scan', async (_req, res) => {
+    try {
+      const adb = botManager.getAdbController();
+      const checkRes = await screenRuleManager.checkAndExecuteRule(adb);
+      if (checkRes.matched && checkRes.rule) {
+        return res.json({ success: true, matched: true, rule: checkRes.rule });
+      }
+      const webhook = botManager.getWebhookService();
+      const pending = await screenRuleManager.handleUnknownScreen(adb, webhook, {
+        commandName: 'scan',
+        args: [],
+        log: (m) => botManager.addLog(m, 'info')
+      }, {
+        macroName: 'web-scan',
+        stepNumber: 0,
+        targetName: 'current-screen'
+      });
+      res.json({
+        success: true,
+        matched: false,
+        pending: {
+          id: pending.id,
+          keywords: pending.keywords,
+          ocrSnippet: pending.ocrSnippet,
+          screenshotBase64: pending.screenshotBuffer.toString('base64')
+        }
       });
     } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });

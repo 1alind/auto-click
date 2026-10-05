@@ -10,6 +10,7 @@ import { fixacCommand, textsCommand } from './commands/fixac';
 import { subCommand } from './commands/sub';
 import { aiCommand } from './commands/ai';
 import { moveCommand } from './commands/move';
+import { ruleCommand } from './commands/rule';
 import {
   tapCommand,
   screenshotCommand,
@@ -33,54 +34,10 @@ import { RefImageManager } from './refImage';
 import { CrashHandler } from './crashHandler';
 import { AutoUpdater } from './autoUpdater';
 import { ConsoleLogger } from './consoleLogger';
+import { StoragePaths } from './storagePaths';
 
 export function resolveConfigFilePath(): string {
-  const homeDir = process.env.HOME || os.homedir() || '';
-  const autoclickJsonPaths = [
-    path.resolve(homeDir, 'storage/shared/autoclick/auto-click.json'),
-    path.resolve(homeDir, 'storage/shared/autoclick/autoclick.json'),
-    path.resolve(homeDir, 'storage/shared/autoclick/bot-config.json'),
-    path.resolve(homeDir, 'storage/shared/autoclick/config.json'),
-    '/sdcard/autoclick/auto-click.json',
-    '/sdcard/autoclick/autoclick.json',
-    '/storage/emulated/0/autoclick/auto-click.json',
-    '/storage/emulated/0/autoclick/autoclick.json'
-  ];
-
-  for (const p of autoclickJsonPaths) {
-    if (fs.existsSync(p)) return p;
-  }
-
-  // Also check if any .json file exists inside ~/storage/shared/autoclick
-  const autoclickDirs = [
-    path.resolve(homeDir, 'storage/shared/autoclick'),
-    '/sdcard/autoclick',
-    '/storage/emulated/0/autoclick'
-  ];
-  for (const dir of autoclickDirs) {
-    if (fs.existsSync(dir)) {
-      try {
-        const files = fs.readdirSync(dir);
-        const jsonFile = files.find((f) => f.toLowerCase().endsWith('.json'));
-        if (jsonFile) return path.join(dir, jsonFile);
-      } catch {
-        // ignore
-      }
-      return path.join(dir, 'auto-click.json');
-    }
-  }
-
-  const sharedDir = path.resolve(homeDir, 'storage/shared');
-  if (fs.existsSync(sharedDir) || process.env.TERMUX_VERSION || process.env.PREFIX?.includes('com.termux')) {
-    return path.resolve(homeDir, 'storage/shared/autoclick/auto-click.json');
-  }
-
-  const localAutoClick = path.resolve(process.cwd(), 'auto-click.json');
-  const localBotConfig = path.resolve(process.cwd(), 'bot-config.json');
-  if (fs.existsSync(localAutoClick)) return localAutoClick;
-  if (fs.existsSync(localBotConfig)) return localBotConfig;
-
-  return path.resolve(homeDir, 'storage/shared/autoclick/auto-click.json');
+  return StoragePaths.getConfigPath();
 }
 
 export class BotManager {
@@ -172,6 +129,7 @@ export class BotManager {
     this.discord.registerCommand(liveCommand);
     this.discord.registerCommand(aiCommand);
     this.discord.registerCommand(moveCommand);
+    this.discord.registerCommand(ruleCommand);
 
     // Load and register all saved custom macros as direct commands (e.g. "start")
     import('./macroManager').then(({ MacroManager }) => {

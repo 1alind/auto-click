@@ -1,4 +1,5 @@
 import { CommandDefinition, CommandContext, CommandResult } from '../types';
+import { StoragePaths } from '../storagePaths';
 
 export const tapCommand: CommandDefinition = {
   name: 'tap',
@@ -177,30 +178,7 @@ export const screenshotCommand: CommandDefinition = {
         savedFileName = isRegionCrop ? `crop_${Date.now()}.png` : `screen_${Date.now()}.png`;
       }
 
-      const homeDir = process.env.HOME || os.homedir() || '';
-      const sharedDirs = [
-        path.resolve(homeDir, 'storage/shared/autoclick'),
-        '/sdcard/autoclick',
-        '/storage/emulated/0/autoclick'
-      ];
-
-      let targetDir = sharedDirs[0];
-      for (const dir of sharedDirs) {
-        if (fs.existsSync(dir)) {
-          targetDir = dir;
-          break;
-        }
-        const parent = path.dirname(dir);
-        if (fs.existsSync(parent)) {
-          targetDir = dir;
-          break;
-        }
-      }
-
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
-
+      const targetDir = StoragePaths.getImagesDir();
       const fullSavePath = path.join(targetDir, savedFileName);
       await fs.promises.writeFile(fullSavePath, finalBuffer);
       ctx.log(`💾 Saved permanent image to ${fullSavePath}`, 'info');
@@ -820,28 +798,6 @@ export const imagesCommand: CommandDefinition = {
     const webhook = botManager.getWebhookService();
     const fs = await import('fs');
     const path = await import('path');
-    const os = await import('os');
-
-    const homeDir = process.env.HOME || os.homedir() || '';
-    const sharedDirs = [
-      path.resolve(homeDir, 'storage/shared/autoclick'),
-      '/sdcard/autoclick',
-      '/storage/emulated/0/autoclick'
-    ];
-
-    let targetDir = sharedDirs[0];
-    for (const dir of sharedDirs) {
-      if (fs.existsSync(dir)) {
-        targetDir = dir;
-        break;
-      }
-    }
-
-    if (!fs.existsSync(targetDir)) {
-      const msg = 'no saved images';
-      if (ctx.reply) await ctx.reply(msg);
-      return { success: true, message: msg };
-    }
 
     const sub = ctx.args[0]?.toLowerCase();
     if (sub === 'delete' || sub === 'del' || sub === 'rm' || sub === 'remove') {
@@ -853,54 +809,50 @@ export const imagesCommand: CommandDefinition = {
       }
 
       const clean = path.basename(targetName.trim());
-      const candidates = [clean, `${clean}.png`, `${clean}.jpg`, `${clean}.jpeg`];
-      let deletedFile: string | null = null;
+      const resolved = StoragePaths.resolveImage(clean);
 
-      for (const candidate of candidates) {
-        const fullPath = path.join(targetDir, candidate);
-        if (fs.existsSync(fullPath)) {
-          await fs.promises.unlink(fullPath);
-          deletedFile = candidate;
-          break;
-        }
+      if (resolved && fs.existsSync(resolved)) {
+        await fs.promises.unlink(resolved);
+        const msg = `deleted \`${path.basename(resolved)}\` from \`${path.dirname(resolved)}\``;
+        if (ctx.reply) await ctx.reply(msg);
+        return { success: true, message: msg };
       }
 
-      const msg = deletedFile ? `deleted \`${deletedFile}\`` : `file "${clean}" not found`;
+      const msg = `file "${clean}" not found in \`sdcard/autoclick/images/\``;
       if (ctx.reply) await ctx.reply(msg);
-      return { success: Boolean(deletedFile), message: msg };
+      return { success: false, message: msg };
     }
 
-    const entries = await fs.promises.readdir(targetDir);
-    const imageFiles = entries.filter((f) => /\.(png|jpg|jpeg|webp)$/i.test(f));
+    const allImages = StoragePaths.getAllImages();
 
-    if (imageFiles.length === 0) {
-      const msg = 'no saved images in autoclick folder';
+    if (allImages.length === 0) {
+      const msg = `no saved images in \`${StoragePaths.getImagesDir()}\``;
       if (ctx.reply) await ctx.reply(msg);
       return { success: true, message: msg };
     }
 
     if (webhook.isConfigured()) {
-      for (const fileName of imageFiles) {
+      for (const img of allImages) {
         try {
-          const fullPath = path.join(targetDir, fileName);
-          const buf = await fs.promises.readFile(fullPath);
+          const buf = await fs.promises.readFile(img.fullPath);
           await webhook.send({
-            content: `\`${fileName}\``,
+            content: `\`${img.name}\` *(folder: ${img.folder})*`,
             fileBuffer: buf,
-            fileName
+            fileName: img.name
           });
         } catch {
           // ignore unreadable file
         }
       }
     } else if (ctx.reply) {
-      await ctx.reply(imageFiles.map((f) => `\`${f}\``).join('\n'));
+      const listLines = allImages.map((img) => `• \`${img.name}\` (${img.folder}/)`);
+      await ctx.reply(`📁 **Saved Images** (${allImages.length}):\n${listLines.join('\n')}`);
     }
 
     return {
       success: true,
-      message: `sent ${imageFiles.length} images`,
-      data: { files: imageFiles }
+      message: `found ${allImages.length} images`,
+      data: { files: allImages.map((i) => i.name) }
     };
   }
 };

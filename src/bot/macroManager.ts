@@ -4,7 +4,8 @@ import os from 'os';
 import { CommandContext, CommandResult, StepLog } from './types';
 import { TemplateMatcher } from './matcher';
 import { RefImageManager } from './refImage';
-import { aiLearner } from './aiLearner';
+import { screenRuleManager } from './screenRuleManager';
+import { StoragePaths } from './storagePaths';
 
 export type MacroActionType =
   | 'tap'
@@ -106,84 +107,19 @@ export async function captureCleanErrorScreenshot(
 }
 
 function resolveStartStateFilePath(): string {
-  const homeDir = process.env.HOME || os.homedir() || '';
-  const candidates = [
-    path.resolve(homeDir, 'storage/shared/autoclick/start-state.json'),
-    '/sdcard/autoclick/start-state.json',
-    '/storage/emulated/0/autoclick/start-state.json'
-  ];
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  for (const candidate of candidates) {
-    const dir = path.dirname(candidate);
-    const parent = path.dirname(dir);
-    if (fs.existsSync(dir) || fs.existsSync(parent)) {
-      try {
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
-        }
-        return candidate;
-      } catch {
-        // continue
-      }
-    }
-  }
-
-  return path.resolve(process.cwd(), 'start-state.json');
+  return StoragePaths.getStartStatePath();
 }
 
 function resolveMacrosFilePath(): string {
-  const homeDir = process.env.HOME || os.homedir() || '';
-  const candidates = [
-    path.resolve(homeDir, 'storage/shared/autoclick/custom-macros.json'),
-    '/sdcard/autoclick/custom-macros.json',
-    '/storage/emulated/0/autoclick/custom-macros.json'
-  ];
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  for (const candidate of candidates) {
-    const parent = path.dirname(path.dirname(candidate));
-    if (fs.existsSync(parent)) {
-      return candidate;
-    }
-  }
-
-  return path.resolve(process.cwd(), 'custom-macros.json');
+  return StoragePaths.getMacrosPath();
 }
 
 function resolveCustomImagePath(imageName: string): string {
   const clean = imageName.trim();
-  const homeDir = process.env.HOME || os.homedir() || '';
-  const sharedDirs = [
-    path.resolve(homeDir, 'storage/shared/autoclick'),
-    '/sdcard/autoclick',
-    '/storage/emulated/0/autoclick',
-    process.cwd()
-  ];
-
+  const resolved = StoragePaths.resolveImage(clean);
+  if (resolved) return resolved;
   const hasExt = /\.[a-z0-9]+$/i.test(clean);
-  const fileVariants = hasExt ? [clean] : [clean, `${clean}.jpg`, `${clean}.png`, `${clean}.jpeg`];
-
-  for (const dir of sharedDirs) {
-    for (const variant of fileVariants) {
-      const candidate = path.resolve(dir, variant);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  return path.resolve(homeDir, 'storage/shared/autoclick', hasExt ? clean : `${clean}.jpg`);
+  return path.join(StoragePaths.getImagesDir(), hasExt ? clean : `${clean}.jpg`);
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1046,23 +982,26 @@ export class MacroManager {
                 }
 
                 if (!recovered) {
-                  // Only allow prompt rescues up to 3 times on the same step to prevent infinite loops
-                  if (consecutiveRescuesOnStep < 3) {
-                    // =========================================================================
-                    // STEP A: Offline Prompt Memory (0 AI calls, 5ms from sdcard)
-                    // =========================================================================
-                    const offlineLearned = await aiLearner.checkAndExecuteLearnedPrompt(adb);
-                    if (offlineLearned.found && offlineLearned.prompt) {
+                  // Check if this screen matches any user-configured screen rules (Zero AI)
+                  if (consecutiveRescuesOnStep < 2) {
+                    const ruleCheck = await screenRuleManager.checkAndExecuteRule(adb);
+                    if (ruleCheck.matched && ruleCheck.rule) {
                       lastRescuedStep = i;
                       consecutiveRescuesOnStep++;
+                      const actionDesc =
+                        ruleCheck.rule.action.type === 'tap'
+                          ? `Tapped (${ruleCheck.rule.action.x}, ${ruleCheck.rule.action.y})`
+                          : ruleCheck.rule.action.type === 'back'
+                          ? 'Pressed Back button'
+                          : `Tapped range ${ruleCheck.rule.action.minX}-${ruleCheck.rule.action.maxX}`;
                       ctx.log(
-                        `🧠 Offline Prompt Memory: Recognized learned prompt "${offlineLearned.prompt.name}" from sdcard! Tapped (${offlineLearned.prompt.clickX}, ${offlineLearned.prompt.clickY}). Resuming (attempt ${consecutiveRescuesOnStep}/3)...`,
+                        `🛡️ Screen Rule Handled: Recognized "${ruleCheck.rule.id}"! ${actionDesc}. Resuming step ${stepNumber}...`,
                         'info'
                       );
                       if (webhook.isConfigured()) {
                         await webhook
                           .send({
-                            content: `🧠 **Offline Prompt Solved**: Recognized \`${offlineLearned.prompt.name}\` from sdcard! Tapped \`(${offlineLearned.prompt.clickX}, ${offlineLearned.prompt.clickY})\` (reused ${offlineLearned.prompt.timesUsed} times). Resuming...`
+                            content: `🛡️ **Screen Rule Solved**: Recognized \`${ruleCheck.rule.id}\`! ${actionDesc} (triggered ${ruleCheck.rule.timesTriggered} times). Resuming...`
                           })
                           .catch(() => {});
                       }
@@ -1070,60 +1009,23 @@ export class MacroManager {
                       i--; // Retry current step
                       continue;
                     }
-
-                    // =========================================================================
-                    // STEP B: Gemini AI Vision Rescue & Self-Learning to SDCard
-                    // =========================================================================
-                    const hasApiKey = Boolean(process.env.GEMINI_API_KEY || config.geminiApiKey);
-                    if (hasApiKey) {
-                      ctx.log(`🤖 Step ${stepNumber} blocked — asking Gemini Vision to analyze unexpected prompt...`, 'info');
-                      const aiRescue = await aiLearner.rescueWithGeminiAndLearn(adb, {
-                        customApiKey: config.geminiApiKey,
-                        customModel: config.geminiModel,
-                        currentAction: `Executing macro "${macro.name}" step ${stepNumber}: looking for "${targetName}"`,
-                        log: (msg, lvl) => ctx.log(msg, lvl || 'info')
-                      });
-
-                      if (aiRescue.success && aiRescue.promptDetected && aiRescue.clickCoords) {
-                        lastRescuedStep = i;
-                        consecutiveRescuesOnStep++;
-                        ctx.log(`🎉 AI Rescue Success: ${aiRescue.message}`, 'info');
-                        if (webhook.isConfigured()) {
-                          await webhook
-                            .send({
-                              content: `🤖 **AI Learned New Prompt**: \`${aiRescue.name}\`!\n• Action: ${aiRescue.description}\n• Tapped: \`(${aiRescue.clickCoords.x}, ${aiRescue.clickCoords.y})\`\n• 💾 **Saved to sdcard**: will be handled 100% offline in future without AI!`
-                            })
-                            .catch(() => {});
-                        }
-                        await sleep(1200);
-                        i--; // Retry current step
-                        continue;
-                      }
-                    }
-                  } else {
-                    ctx.log(
-                      `⚠️ Prompt rescue already attempted ${consecutiveRescuesOnStep} times on step ${stepNumber} without clearing block. Proceeding to normal error handling.`,
-                      'warn'
-                    );
                   }
 
+                  // No rule matched: Capture FULL screen screenshot, detect text & unique info, assign ID
                   const scorePct = match.score * 100;
                   const threshPct = effectiveThreshold * 100;
-                  const errorMsg = `❌ Image "${targetName}" NOT found in ${macro.name} step ${stepNumber} (and no fallback buttons found)! Score: ${scorePct.toFixed(1)}% (< ${threshPct.toFixed(0)}%). Stopping macro.`;
+                  const errorMsg = `❌ Image "${targetName}" NOT found in ${macro.name} step ${stepNumber}! Score: ${scorePct.toFixed(1)}% (< ${threshPct.toFixed(0)}%).`;
                   ctx.log(errorMsg, 'error');
 
                   try {
                     const webhook = botManager.getWebhookService();
-                    if (webhook.isConfigured()) {
-                      const croppedBuffer = await captureCleanErrorScreenshot(adb, region, rawScreen);
-                      await webhook.send({
-                        content: errorMsg,
-                        fileBuffer: croppedBuffer,
-                        fileName: `not_found_step${stepNumber}.png`
-                      });
-                    }
+                    await screenRuleManager.handleUnknownScreen(adb, webhook, ctx, {
+                      macroName: macro.name,
+                      stepNumber,
+                      targetName
+                    });
                   } catch (err: any) {
-                    ctx.log(`Failed to crop or send error image to Discord: ${err.message}`, 'warn');
+                    ctx.log(`Failed to process unknown screen: ${err.message}`, 'warn');
                   }
 
                   this.saveStartState({
@@ -1140,67 +1042,50 @@ export class MacroManager {
                   return { success: false, message: errorMsg, steps: stepsLog };
                 }
               } else {
-                if (consecutiveRescuesOnStep < 3) {
-                  // Check offline learned prompts first
-                  const offlineLearned = await aiLearner.checkAndExecuteLearnedPrompt(adb);
-                  if (offlineLearned.found && offlineLearned.prompt) {
+                if (consecutiveRescuesOnStep < 2) {
+                  const ruleCheck = await screenRuleManager.checkAndExecuteRule(adb);
+                  if (ruleCheck.matched && ruleCheck.rule) {
                     lastRescuedStep = i;
                     consecutiveRescuesOnStep++;
+                    const actionDesc =
+                      ruleCheck.rule.action.type === 'tap'
+                        ? `Tapped (${ruleCheck.rule.action.x}, ${ruleCheck.rule.action.y})`
+                        : ruleCheck.rule.action.type === 'back'
+                        ? 'Pressed Back button'
+                        : `Tapped range ${ruleCheck.rule.action.minX}-${ruleCheck.rule.action.maxX}`;
                     ctx.log(
-                      `🧠 Offline Prompt Memory: Recognized learned prompt "${offlineLearned.prompt.name}"! Tapped (${offlineLearned.prompt.clickX}, ${offlineLearned.prompt.clickY}). Resuming (attempt ${consecutiveRescuesOnStep}/3)...`,
+                      `🛡️ Screen Rule Handled: Recognized "${ruleCheck.rule.id}"! ${actionDesc}. Resuming step ${stepNumber}...`,
                       'info'
                     );
+                    if (webhook.isConfigured()) {
+                      await webhook
+                        .send({
+                          content: `🛡️ **Screen Rule Solved**: Recognized \`${ruleCheck.rule.id}\`! ${actionDesc} (triggered ${ruleCheck.rule.timesTriggered} times). Resuming...`
+                        })
+                        .catch(() => {});
+                    }
                     await sleep(800);
-                    i--;
+                    i--; // Retry current step
                     continue;
                   }
-
-                  // Ask Gemini AI
-                  const hasApiKey = Boolean(process.env.GEMINI_API_KEY || config.geminiApiKey);
-                  if (hasApiKey) {
-                    const aiRescue = await aiLearner.rescueWithGeminiAndLearn(adb, {
-                      customApiKey: config.geminiApiKey,
-                      customModel: config.geminiModel,
-                      currentAction: `Executing macro "${macro.name}" step ${stepNumber}: looking for "${targetName}"`,
-                      log: (msg, lvl) => ctx.log(msg, lvl || 'info')
-                    });
-                    if (aiRescue.success && aiRescue.promptDetected && aiRescue.clickCoords) {
-                      lastRescuedStep = i;
-                      consecutiveRescuesOnStep++;
-                      ctx.log(`🎉 AI Rescue Success: ${aiRescue.message}`, 'info');
-                      await sleep(1200);
-                      i--;
-                      continue;
-                    }
-                  }
-                } else {
-                  ctx.log(
-                    `⚠️ Prompt rescue already attempted ${consecutiveRescuesOnStep} times on step ${stepNumber} without clearing block. Proceeding to normal error handling.`,
-                    'warn'
-                  );
                 }
 
                 const scorePct = match.score * 100;
                 const threshPct = effectiveThreshold * 100;
-                const errorMsg = `❌ Image "${targetName}" NOT found in ${macro.name} step ${stepNumber}! Score: ${scorePct.toFixed(1)}% (< ${threshPct.toFixed(0)}%). Stopping macro.`;
+                const errorMsg = `❌ Image "${targetName}" NOT found in ${macro.name} step ${stepNumber}! Score: ${scorePct.toFixed(1)}% (< ${threshPct.toFixed(0)}%).`;
                 ctx.log(errorMsg, 'error');
 
-                // Crop the specific region/area from the screen buffer to send to Discord
                 try {
                   const webhook = botManager.getWebhookService();
-                  if (webhook.isConfigured()) {
-                    const croppedBuffer = await captureCleanErrorScreenshot(adb, region, rawScreen);
-                    await webhook.send({
-                      content: errorMsg,
-                      fileBuffer: croppedBuffer,
-                      fileName: `not_found_${targetName}_step${stepNumber}.png`
-                    });
-                  }
+                  await screenRuleManager.handleUnknownScreen(adb, webhook, ctx, {
+                    macroName: macro.name,
+                    stepNumber,
+                    targetName
+                  });
                 } catch (err: any) {
-                  ctx.log(`Failed to crop or send error image to Discord: ${err.message}`, 'warn');
+                  ctx.log(`Failed to process unknown screen: ${err.message}`, 'warn');
                 }
 
-                // Stop macro execution immediately
                 if (isStartMacro) {
                   this.saveStartState({
                     isRunning: false,

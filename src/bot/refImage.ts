@@ -1,63 +1,21 @@
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { Jimp } from 'jimp';
+import { StoragePaths } from './storagePaths';
 
 export function resolveAutoclickDir(): string {
-  const homeDir = process.env.HOME || os.homedir() || '';
-  const candidates = [
-    path.resolve(homeDir, 'storage/shared/autoclick'),
-    '/sdcard/autoclick',
-    '/storage/emulated/0/autoclick'
-  ];
-
-  for (const dir of candidates) {
-    if (fs.existsSync(dir)) return dir;
-  }
-
-  const sharedBase = path.resolve(homeDir, 'storage/shared');
-  if (fs.existsSync(sharedBase) || process.env.TERMUX_VERSION || process.env.PREFIX?.includes('com.termux')) {
-    return path.resolve(homeDir, 'storage/shared/autoclick');
-  }
-
-  if (fs.existsSync('/sdcard')) return '/sdcard/autoclick';
-  if (fs.existsSync('/storage/emulated/0')) return '/storage/emulated/0/autoclick';
-
-  return path.resolve(process.cwd(), 'ref');
+  return StoragePaths.getImagesDir();
 }
 
 export class RefImageManager {
   public static getRefDir(): string {
-    return resolveAutoclickDir();
+    return StoragePaths.getImagesDir();
   }
 
   public static getRefPath(): string {
-    const homeDir = process.env.HOME || os.homedir() || '';
-    const searchDirs = [
-      path.resolve(homeDir, 'storage/shared/autoclick'),
-      '/sdcard/autoclick',
-      '/storage/emulated/0/autoclick',
-      path.resolve(process.cwd(), 'ref')
-    ];
-
-    const preferredNames = ['pfp.png', 'pfp.jpg', 'pfp.jpeg', 'pfp.bmp'];
-
-    for (const dir of searchDirs) {
-      if (!fs.existsSync(dir)) continue;
-      for (const name of preferredNames) {
-        const full = path.join(dir, name);
-        if (fs.existsSync(full)) return full;
-      }
-      try {
-        const files = fs.readdirSync(dir);
-        const match = files.find((f) => /^pfp\.(png|jpg|jpeg|bmp)$/i.test(f));
-        if (match) return path.join(dir, match);
-      } catch {
-        // ignore
-      }
-    }
-
-    return path.join(this.getRefDir(), 'pfp.png');
+    const resolved = StoragePaths.resolveImage('pfp');
+    if (resolved) return resolved;
+    return path.join(StoragePaths.getImagesDir(), 'pfp.png');
   }
 
   public static async ensureRefImage(): Promise<string> {

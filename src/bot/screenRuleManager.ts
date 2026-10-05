@@ -1,0 +1,423 @@
+import fs from 'fs';
+import path from 'path';
+import { Jimp } from 'jimp';
+import { AdbController } from './adb';
+import { WebhookService } from './webhook';
+import { CommandContext } from './types';
+import { recognizeLinesWithTimeout, OcrLineResult } from './commands/fixac';
+import { StoragePaths } from './storagePaths';
+
+export interface ScreenRuleAction {
+  type: 'tap' | 'tap_range' | 'back' | 'ignore';
+  x?: number;
+  y?: number;
+  minX?: number;
+  maxX?: number;
+  minY?: number;
+  maxY?: number;
+}
+
+export interface ScreenRule {
+  id: string;
+  name?: string;
+  keywords: string[];
+  rawOcrSnippet: string;
+  action: ScreenRuleAction;
+  timesTriggered: number;
+  lastTriggeredAt?: string;
+  createdAt: string;
+}
+
+export interface PendingUnknownScreen {
+  id: string;
+  keywords: string[];
+  fullText: string;
+  ocrSnippet: string;
+  screenshotBuffer: Buffer;
+  macroName: string;
+  stepNumber: number;
+  targetName: string;
+  timestamp: number;
+}
+
+export class ScreenRuleManager {
+  private static instance: ScreenRuleManager;
+  private rules: ScreenRule[] = [];
+  private storageDir: string = '';
+  private jsonPath: string = '';
+  private latestPendingScreen: PendingUnknownScreen | null = null;
+
+  private constructor() {
+    this.initStorage();
+    this.loadRules();
+  }
+
+  public static getInstance(): ScreenRuleManager {
+    if (!ScreenRuleManager.instance) {
+      ScreenRuleManager.instance = new ScreenRuleManager();
+    }
+    return ScreenRuleManager.instance;
+  }
+
+  private initStorage(): void {
+    this.storageDir = StoragePaths.getRulesDir();
+    this.jsonPath = StoragePaths.getRulesPath();
+  }
+
+  public getStorageDir(): string {
+    return this.storageDir;
+  }
+
+  public getRules(): ScreenRule[] {
+    return [...this.rules];
+  }
+
+  public getRule(id: string): ScreenRule | undefined {
+    const cleanId = id.trim().toLowerCase();
+    return this.rules.find((r) => r.id.toLowerCase() === cleanId);
+  }
+
+  public getLatestPendingScreen(): PendingUnknownScreen | null {
+    return this.latestPendingScreen;
+  }
+
+  private loadRules(): void {
+    try {
+      if (fs.existsSync(this.jsonPath)) {
+        const raw = fs.readFileSync(this.jsonPath, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          this.rules = parsed;
+        }
+      }
+    } catch (err: any) {
+      console.warn('[ScreenRuleManager] Failed to load screen rules:', err.message);
+      this.rules = [];
+    }
+  }
+
+  public saveRules(): void {
+    try {
+      fs.mkdirSync(this.storageDir, { recursive: true });
+      fs.writeFileSync(this.jsonPath, JSON.stringify(this.rules, null, 2), 'utf8');
+    } catch (err: any) {
+      console.error('[ScreenRuleManager] Failed to save screen rules:', err.message);
+    }
+  }
+
+  /**
+   * Cleans OCR text and extracts meaningful keywords (3+ letters, excluding common stop words)
+   */
+  public extractUniqueKeywords(text: string): string[] {
+    const stopWords = new Set([
+      'the', 'and', 'for', 'that', 'this', 'with', 'from', 'have', 'were', 'been',
+      'will', 'would', 'there', 'their', 'what', 'when', 'where', 'which', 'your',
+      'user', 'game', 'level', 'player', 'click', 'press', 'please', 'cancel',
+      'confirm', 'okay', 'ok', 'yes', 'no', 'are', 'you', 'sure', 'want'
+    ]);
+
+    const cleaned = text
+      .toLowerCase()
+      .replace(/[^a-z0-9_\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const words = cleaned.split(' ');
+    const counts = new Map<string, number>();
+
+    for (const w of words) {
+      if (w.length < 4) continue;
+      if (/^\d+$/.test(w)) continue; // skip pure numbers
+      if (stopWords.has(w)) continue;
+      counts.set(w, (counts.get(w) || 0) + 1);
+    }
+
+    // Sort by length & uniqueness, return top 4-6 keywords
+    const sorted = Array.from(counts.keys()).sort((a, b) => b.length - a.length);
+    return sorted.slice(0, 5);
+  }
+
+  /**
+   * Generates a clean human-readable screen ID from detected keywords
+   */
+  public generateScreenId(keywords: string[]): string {
+    if (keywords.length >= 2) {
+      const slug = keywords.slice(0, 3).join('_').replace(/[^a-z0-9_]/g, '');
+      return slug.length > 2 ? slug : `screen_${Date.now().toString().slice(-6)}`;
+    }
+    if (keywords.length === 1 && keywords[0].length >= 3) {
+      return `${keywords[0]}_screen`;
+    }
+    return `screen_${Date.now().toString().slice(-6)}`;
+  }
+
+  /**
+   * Checks current screen against all user-configured rules using local OCR.
+   * If matched, immediately executes the configured action!
+   */
+  public async checkAndExecuteRule(
+    adb: AdbController,
+    screenPngBuffer?: Buffer
+  ): Promise<{ matched: boolean; rule?: ScreenRule; tapResult?: any }> {
+    if (this.rules.length === 0) {
+      return { matched: false };
+    }
+
+    try {
+      const pngBuf = screenPngBuffer || (await adb.screencap());
+      const ocrRes = await recognizeLinesWithTimeout(pngBuf, 0, 0, 1, 4500);
+      const fullText = (ocrRes.fullText || ocrRes.lines.map((l) => l.text).join(' ')).toLowerCase();
+
+      for (const rule of this.rules) {
+        if (!rule.keywords || rule.keywords.length === 0) continue;
+
+        // Check how many keywords match
+        const matchedKeywords = rule.keywords.filter((kw) => fullText.includes(kw.toLowerCase()));
+        const matchRatio = matchedKeywords.length / rule.keywords.length;
+
+        // Matches if at least 60% of keywords (or at least 2) are present
+        const isMatched =
+          rule.keywords.length === 1
+            ? matchedKeywords.length === 1
+            : matchRatio >= 0.6 || matchedKeywords.length >= 2;
+
+        if (isMatched) {
+          // Execute the user-defined action
+          let tapRes: any = null;
+          if (rule.action.type === 'tap' && rule.action.x !== undefined && rule.action.y !== undefined) {
+            tapRes = await adb.tap(rule.action.x, rule.action.y);
+          } else if (rule.action.type === 'tap_range') {
+            tapRes = await adb.tapRandomRange(
+              rule.action.minX ?? 0,
+              rule.action.maxX ?? 100,
+              rule.action.minY ?? 0,
+              rule.action.maxY ?? 100
+            );
+          } else if (rule.action.type === 'back') {
+            await adb.keyEvent(4); // Android KEYCODE_BACK
+            tapRes = { back: true };
+          }
+
+          rule.timesTriggered = (rule.timesTriggered || 0) + 1;
+          rule.lastTriggeredAt = new Date().toISOString();
+          this.saveRules();
+
+          return {
+            matched: true,
+            rule,
+            tapResult: tapRes
+          };
+        }
+      }
+    } catch (err: any) {
+      console.warn('[ScreenRuleManager] Error checking screen rules:', err.message);
+    }
+
+    return { matched: false };
+  }
+
+  /**
+   * When an unknown screen blocks a macro:
+   * 1. Captures a full-screen screenshot
+   * 2. Extracts unique text & generates a screen ID
+   * 3. Sends full screenshot & instructions to Discord
+   * 4. Stores it as latestPendingScreen so user can easily configure it
+   */
+  public async handleUnknownScreen(
+    adb: AdbController,
+    webhook: WebhookService,
+    ctx: CommandContext,
+    contextInfo: { macroName: string; stepNumber: number; targetName: string }
+  ): Promise<PendingUnknownScreen> {
+    const screenshot = await adb.screencap();
+    let fullText = '';
+    let ocrLines: OcrLineResult[] = [];
+
+    try {
+      const ocrRes = await recognizeLinesWithTimeout(screenshot, 0, 0, 1, 5000);
+      fullText = ocrRes.fullText || '';
+      ocrLines = ocrRes.lines || [];
+    } catch (err: any) {
+      ctx.log(`Local OCR during unknown screen check: ${err.message}`, 'warn');
+    }
+
+    const keywords = this.extractUniqueKeywords(fullText);
+    const suggestedId = this.generateScreenId(keywords);
+
+    const snippetLines = ocrLines
+      .slice(0, 4)
+      .map((l) => l.text.trim())
+      .filter(Boolean);
+    const ocrSnippet = snippetLines.join(' | ') || (fullText ? fullText.slice(0, 120) : 'No readable text');
+
+    const pending: PendingUnknownScreen = {
+      id: suggestedId,
+      keywords,
+      fullText,
+      ocrSnippet,
+      screenshotBuffer: screenshot,
+      macroName: contextInfo.macroName,
+      stepNumber: contextInfo.stepNumber,
+      targetName: contextInfo.targetName,
+      timestamp: Date.now()
+    };
+
+    this.latestPendingScreen = pending;
+
+    // Save screenshot directly to SD card rules folder so it is preserved across app updates
+    try {
+      const savedPngPath = path.join(StoragePaths.getRulesDir(), `screen_${suggestedId}.png`);
+      fs.writeFileSync(savedPngPath, screenshot);
+    } catch (err: any) {
+      ctx.log(`Could not write screen_${suggestedId}.png to rules folder: ${err.message}`, 'warn');
+    }
+
+    const keywordsDisplay = keywords.length > 0 ? keywords.map((k) => `\`${k}\``).join(', ') : '*(None detected)*';
+    const msg = [
+      `📸 **Unknown Screen Blocked Macro!**`,
+      `• **Macro**: \`${contextInfo.macroName}\` (Step ${contextInfo.stepNumber} looking for \`${contextInfo.targetName}\`)`,
+      `• **Assigned Screen ID**: \`${suggestedId}\``,
+      `• **Unique Info / Keywords**: ${keywordsDisplay}`,
+      `• **Detected Text**: \`${ocrSnippet}\`\n`,
+      `⚙️ **Set what happens when this screen appears**:`,
+      `👉 **Tap Coordinate**: \`rule set ${suggestedId} tap <x> <y>\``,
+      `👉 **Tap Range**: \`rule set ${suggestedId} tap <minX-maxX> <minY-maxY>\``,
+      `👉 **Press Back Button**: \`rule set ${suggestedId} back\``,
+      `👉 **Change Screen ID**: \`rule id <new_id>\` or \`rule set <custom_id> tap <x> <y>\``,
+      `*(Tip: You can also just type \`rule set tap <x> <y>\` to configure this latest screen!)*`
+    ].join('\n');
+
+    ctx.log(`Unknown screen detected: [${suggestedId}]. Sending full-screen screenshot to Discord...`, 'warn');
+
+    if (webhook.isConfigured()) {
+      await webhook.send({
+        content: msg,
+        fileBuffer: screenshot,
+        fileName: `unknown_screen_${suggestedId}_${Date.now()}.png`
+      }).catch((err) => {
+        ctx.log(`Failed to upload unknown screen to Discord: ${err.message}`, 'error');
+      });
+    } else if (ctx.reply) {
+      await ctx.reply(msg);
+    }
+
+    return pending;
+  }
+
+  /**
+   * Updates the suggested ID for the latest pending unknown screen
+   */
+  public setPendingId(newId: string): boolean {
+    if (!this.latestPendingScreen) return false;
+    const cleanId = newId.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+    if (!cleanId) return false;
+    this.latestPendingScreen.id = cleanId;
+    return true;
+  }
+
+  /**
+   * Renames an existing screen rule ID and preserves all its keywords, action, and trigger count
+   */
+  public renameRule(oldId: string, newId: string): { success: boolean; message: string; rule?: ScreenRule } {
+    const cleanOld = oldId.trim().toLowerCase();
+    const cleanNew = newId.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+
+    if (!cleanNew) {
+      return { success: false, message: 'New Screen ID cannot be empty.' };
+    }
+
+    const rule = this.rules.find((r) => r.id.toLowerCase() === cleanOld);
+    if (!rule) {
+      return { success: false, message: `Screen rule \`${oldId}\` not found.` };
+    }
+
+    const collision = this.rules.find((r) => r.id.toLowerCase() === cleanNew && r !== rule);
+    if (collision) {
+      return { success: false, message: `A screen rule with ID \`${cleanNew}\` already exists.` };
+    }
+
+    rule.id = cleanNew;
+    rule.name = cleanNew;
+    this.saveRules();
+
+    if (this.latestPendingScreen && this.latestPendingScreen.id.toLowerCase() === cleanOld) {
+      this.latestPendingScreen.id = cleanNew;
+    }
+
+    return { success: true, message: `Renamed screen ID \`${cleanOld}\` to \`${cleanNew}\``, rule };
+  }
+
+  /**
+   * Sets or updates a rule action for a specific screen ID
+   */
+  public setRule(
+    id: string,
+    action: ScreenRuleAction,
+    options?: { keywords?: string[]; snippet?: string }
+  ): ScreenRule {
+    const cleanId = id.trim().toLowerCase();
+    const existingIndex = this.rules.findIndex((r) => r.id.toLowerCase() === cleanId);
+
+    const pending = this.latestPendingScreen && this.latestPendingScreen.id.toLowerCase() === cleanId
+      ? this.latestPendingScreen
+      : null;
+
+    let keywords: string[] = [];
+    if (Array.isArray(options?.keywords)) {
+      keywords = options.keywords.map((k) => String(k).trim().toLowerCase()).filter(Boolean);
+    } else if (typeof options?.keywords === 'string') {
+      keywords = (options.keywords as string)
+        .split(/[,;|]+/)
+        .map((k) => k.trim().toLowerCase())
+        .filter(Boolean);
+    }
+
+    if (keywords.length === 0) {
+      if (pending && pending.keywords.length > 0) {
+        keywords = pending.keywords;
+      } else {
+        keywords = cleanId
+          .split(/[_-\s]+/)
+          .filter((w) => w.length >= 3)
+          .map((w) => w.toLowerCase());
+        if (keywords.length === 0) {
+          keywords = [cleanId];
+        }
+      }
+    }
+
+    const rawOcrSnippet = options?.snippet || (pending ? pending.ocrSnippet : cleanId);
+
+    const rule: ScreenRule = {
+      id: cleanId,
+      name: cleanId,
+      keywords,
+      rawOcrSnippet,
+      action,
+      timesTriggered: existingIndex >= 0 ? this.rules[existingIndex].timesTriggered : 0,
+      createdAt: existingIndex >= 0 ? this.rules[existingIndex].createdAt : new Date().toISOString()
+    };
+
+    if (existingIndex >= 0) {
+      this.rules[existingIndex] = rule;
+    } else {
+      this.rules.push(rule);
+    }
+
+    this.saveRules();
+    return rule;
+  }
+
+  public deleteRule(id: string): boolean {
+    const cleanId = id.trim().toLowerCase();
+    const beforeCount = this.rules.length;
+    this.rules = this.rules.filter((r) => r.id.toLowerCase() !== cleanId);
+    if (this.rules.length !== beforeCount) {
+      this.saveRules();
+      return true;
+    }
+    return false;
+  }
+}
+
+export const screenRuleManager = ScreenRuleManager.getInstance();

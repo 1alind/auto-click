@@ -61,6 +61,176 @@ export default function App() {
   const [actionToast, setActionToast] = useState<string>('');
   const [tunnelLoading, setTunnelLoading] = useState<boolean>(false);
 
+  // Screen Rules (Zero AI Prompt & Screen Handlers)
+  const [showRulesModal, setShowRulesModal] = useState<boolean>(false);
+  const [rulesList, setRulesList] = useState<any[]>([]);
+  const [latestPending, setLatestPending] = useState<any | null>(null);
+  const [ruleInputId, setRuleInputId] = useState<string>('');
+  const [ruleActionType, setRuleActionType] = useState<'tap' | 'back'>('tap');
+  const [ruleTapX, setRuleTapX] = useState<string>('500');
+  const [ruleTapY, setRuleTapY] = useState<string>('1000');
+  const [rulesLoading, setRulesLoading] = useState<boolean>(false);
+
+  // Manual rule creation state
+  const [showManualForm, setShowManualForm] = useState<boolean>(false);
+  const [manualId, setManualId] = useState<string>('');
+  const [manualKeywords, setManualKeywords] = useState<string>('');
+  const [manualActionType, setManualActionType] = useState<'tap' | 'back'>('tap');
+  const [manualTapX, setManualTapX] = useState<string>('500');
+  const [manualTapY, setManualTapY] = useState<string>('1000');
+  const [isScanningScreen, setIsScanningScreen] = useState<boolean>(false);
+
+  const fetchRules = useCallback(async () => {
+    try {
+      setRulesLoading(true);
+      const res = await fetch('/api/screen-rules').then((r) => r.json());
+      if (res?.success) {
+        setRulesList(res.rules || []);
+        setLatestPending(res.latestPending || null);
+        if (res.latestPending && !ruleInputId) {
+          setRuleInputId(res.latestPending.id);
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setRulesLoading(false);
+    }
+  }, [ruleInputId]);
+
+  const handleSaveRule = async () => {
+    const targetId = (ruleInputId || latestPending?.id || '').trim();
+    if (!targetId) {
+      showToast('Screen ID is required');
+      return;
+    }
+    const action =
+      ruleActionType === 'back'
+        ? { type: 'back' }
+        : { type: 'tap', x: Number(ruleTapX) || 500, y: Number(ruleTapY) || 1000 };
+
+    try {
+      const res = await fetch('/api/screen-rules/set', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: targetId,
+          action,
+          keywords: latestPending?.keywords,
+          snippet: latestPending?.ocrSnippet
+        })
+      }).then((r) => r.json());
+
+      if (res?.success) {
+        showToast(`Rule saved for "${targetId}"`);
+        setRuleInputId('');
+        await fetchRules();
+      }
+    } catch (err: any) {
+      showToast(`Error: ${err.message}`);
+    }
+  };
+
+  const handleRenameRule = async (oldId: string) => {
+    const newId = prompt(`Enter new Screen ID for "${oldId}":`, oldId);
+    if (!newId || newId.trim() === oldId) return;
+
+    try {
+      const res = await fetch('/api/screen-rules/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldId, newId: newId.trim() })
+      }).then((r) => r.json());
+
+      if (res?.success) {
+        showToast(`Renamed to "${newId.trim()}"`);
+        await fetchRules();
+      } else {
+        showToast(res?.message || 'Failed to rename');
+      }
+    } catch (err: any) {
+      showToast(`Error: ${err.message}`);
+    }
+  };
+
+  const handleDeleteRule = async (id: string) => {
+    try {
+      await fetch(`/api/screen-rules/${id}`, { method: 'DELETE' });
+      showToast(`Deleted rule "${id}"`);
+      await fetchRules();
+    } catch (err: any) {
+      showToast(`Error: ${err.message}`);
+    }
+  };
+
+  const handleScanForManualKeywords = async () => {
+    setIsScanningScreen(true);
+    showToast('Scanning phone screen for keywords...');
+    try {
+      const res = await fetch('/api/screen-rules/scan', { method: 'POST' }).then((r) => r.json());
+      if (res?.pending) {
+        if (res.pending.keywords?.length > 0) {
+          setManualKeywords(res.pending.keywords.join(', '));
+        }
+        if (!manualId && res.pending.id) {
+          setManualId(res.pending.id);
+        }
+        showToast(`Scanned ${res.pending.keywords?.length || 0} keywords!`);
+      } else if (res?.rule) {
+        showToast(`Screen already matches rule "${res.rule.id}"`);
+      }
+    } catch (err: any) {
+      showToast(`Scan failed: ${err.message}`);
+    } finally {
+      setIsScanningScreen(false);
+    }
+  };
+
+  const handleSaveManualRule = async () => {
+    const cleanId = manualId.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+    if (!cleanId) {
+      showToast('Screen ID is required');
+      return;
+    }
+    const keywords = manualKeywords
+      .split(/[,;]+/)
+      .map((k) => k.trim())
+      .filter(Boolean);
+
+    if (keywords.length === 0) {
+      showToast('Please enter at least 1 keyword');
+      return;
+    }
+
+    const action =
+      manualActionType === 'back'
+        ? { type: 'back' }
+        : { type: 'tap', x: Number(manualTapX) || 500, y: Number(manualTapY) || 1000 };
+
+    try {
+      const res = await fetch('/api/screen-rules/set', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: cleanId,
+          action,
+          keywords,
+          snippet: `Manual: ${keywords.join(', ')}`
+        })
+      }).then((r) => r.json());
+
+      if (res?.success) {
+        showToast(`Created rule "${cleanId}"`);
+        setManualId('');
+        setManualKeywords('');
+        setShowManualForm(false);
+        await fetchRules();
+      }
+    } catch (err: any) {
+      showToast(`Error: ${err.message}`);
+    }
+  };
+
   const imgRef = useRef<HTMLImageElement | null>(null);
   const frameInFlightRef = useRef<boolean>(false);
 
@@ -363,6 +533,18 @@ export default function App() {
             >
               ✂️ Crop
             </button>
+            <button
+              onClick={() => {
+                setShowRulesModal(true);
+                fetchRules();
+              }}
+              className="px-2 py-0.5 rounded font-medium transition bg-slate-800 text-slate-300 hover:bg-slate-700 flex items-center gap-1"
+            >
+              <span>🛡️ Rules</span>
+              {latestPending && (
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+              )}
+            </button>
           </div>
 
           <span className="font-mono text-[10px] text-slate-400">
@@ -533,6 +715,316 @@ export default function App() {
           </button>
         </div>
       </main>
+
+      {/* Screen Rules (Zero AI Prompt & Screen Handlers) Modal */}
+      {showRulesModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-2xl text-[12px]">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <span className="text-base">🛡️</span>
+                <div>
+                  <h3 className="font-semibold text-slate-100">Screen Recognition Rules</h3>
+                  <p className="text-[10px] text-slate-400">Zero AI — Auto-handled via local text & coordinates</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowRulesModal(false)}
+                className="text-slate-400 hover:text-white px-2 py-1 rounded"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-3">
+              {/* Latest Pending Unknown Screen (If any) */}
+              {latestPending && (
+                <div className="bg-amber-950/30 border border-amber-500/40 rounded-lg p-2.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-amber-300 text-[11px] flex items-center gap-1.5">
+                      <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping" />
+                      Pending Unknown Screen
+                    </span>
+                    <span className="font-mono text-[10px] text-slate-400">
+                      Step {latestPending.stepNumber} ({latestPending.macroName})
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 text-[11px]">
+                    <span className="text-slate-400 shrink-0">Screen ID:</span>
+                    <input
+                      type="text"
+                      value={ruleInputId}
+                      onChange={(e) => setRuleInputId(e.target.value)}
+                      placeholder={latestPending.id}
+                      className="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1 font-mono text-amber-300 text-[11px]"
+                    />
+                  </div>
+
+                  <div className="text-[10px] text-slate-400 line-clamp-2 bg-slate-950/60 p-1.5 rounded border border-slate-800">
+                    {latestPending.ocrSnippet}
+                  </div>
+
+                  {latestPending.keywords?.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {latestPending.keywords.map((k: string) => (
+                        <span key={k} className="px-1.5 py-0.5 rounded bg-slate-800 text-[10px] text-slate-300 font-mono">
+                          {k}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Configure Action Form */}
+                  <div className="pt-1.5 border-t border-amber-500/20 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <label className="text-[11px] text-slate-300 font-medium">Action:</label>
+                      <button
+                        type="button"
+                        onClick={() => setRuleActionType('tap')}
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                          ruleActionType === 'tap'
+                            ? 'bg-amber-600 text-white'
+                            : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Tap (X, Y)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRuleActionType('back')}
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                          ruleActionType === 'back'
+                            ? 'bg-amber-600 text-white'
+                            : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Press Back
+                      </button>
+                    </div>
+
+                    {ruleActionType === 'tap' && (
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1">
+                          <span className="text-slate-400 text-[10px]">X:</span>
+                          <input
+                            type="number"
+                            value={ruleTapX}
+                            onChange={(e) => setRuleTapX(e.target.value)}
+                            className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-center font-mono text-[11px]"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-slate-400 text-[10px]">Y:</span>
+                          <input
+                            type="number"
+                            value={ruleTapY}
+                            onChange={(e) => setRuleTapY(e.target.value)}
+                            className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-center font-mono text-[11px]"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={handleSaveRule}
+                      className="w-full py-1.5 rounded bg-amber-600 hover:bg-amber-500 font-semibold text-white text-[11px] transition shadow"
+                    >
+                      Save Rule for "{latestPending.id}"
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Manual Rule Creation Toggle & Form */}
+              <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-2.5 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-200 text-[11px] flex items-center gap-1.5">
+                    <span>➕</span> Manually Add Screen Rule
+                  </span>
+                  <button
+                    onClick={() => setShowManualForm(!showManualForm)}
+                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px]"
+                  >
+                    {showManualForm ? '▲ Hide Form' : '▼ Add Rule'}
+                  </button>
+                </div>
+
+                {showManualForm && (
+                  <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                    <div>
+                      <label className="text-[10px] text-slate-400 block mb-0.5">Screen ID / Name:</label>
+                      <input
+                        type="text"
+                        value={manualId}
+                        onChange={(e) => setManualId(e.target.value)}
+                        placeholder="e.g. daily_reward or vip_modal"
+                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 font-mono text-[11px] text-slate-200"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-0.5">
+                        <label className="text-[10px] text-slate-400">Identifying Keywords (comma separated):</label>
+                        <button
+                          type="button"
+                          onClick={handleScanForManualKeywords}
+                          disabled={isScanningScreen}
+                          className="text-[10px] text-indigo-400 hover:text-indigo-300 underline"
+                        >
+                          {isScanningScreen ? 'Scanning...' : '🔍 Scan Phone Screen'}
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={manualKeywords}
+                        onChange={(e) => setManualKeywords(e.target.value)}
+                        placeholder="e.g. reward, claim, daily"
+                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 font-mono text-[11px] text-slate-200"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <label className="text-[11px] text-slate-300 font-medium">Action:</label>
+                      <button
+                        type="button"
+                        onClick={() => setManualActionType('tap')}
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                          manualActionType === 'tap'
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Tap (X, Y)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setManualActionType('back')}
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                          manualActionType === 'back'
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Press Back
+                      </button>
+                    </div>
+
+                    {manualActionType === 'tap' && (
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1">
+                          <span className="text-slate-400 text-[10px]">X:</span>
+                          <input
+                            type="number"
+                            value={manualTapX}
+                            onChange={(e) => setManualTapX(e.target.value)}
+                            className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-center font-mono text-[11px]"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-slate-400 text-[10px]">Y:</span>
+                          <input
+                            type="number"
+                            value={manualTapY}
+                            onChange={(e) => setManualTapY(e.target.value)}
+                            className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-center font-mono text-[11px]"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={handleSaveManualRule}
+                      className="w-full py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 font-semibold text-white text-[11px] transition shadow"
+                    >
+                      Save New Rule
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Active Rules List */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-[11px] text-slate-400">
+                  <span>Saved Rules ({rulesList.length})</span>
+                  <button
+                    onClick={fetchRules}
+                    disabled={rulesLoading}
+                    className="hover:text-slate-200"
+                  >
+                    {rulesLoading ? '...' : '↻ Refresh'}
+                  </button>
+                </div>
+
+                {rulesList.length === 0 ? (
+                  <div className="text-center py-6 text-slate-500 text-[11px]">
+                    No custom rules saved yet. When an unknown dialog appears, the bot will notify you in Discord and here to set its action!
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {rulesList.map((rule) => (
+                      <div
+                        key={rule.id}
+                        className="bg-slate-950 border border-slate-800 rounded-lg p-2 flex items-center justify-between gap-2"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono text-emerald-400 text-[11px] truncate">
+                            {rule.id}
+                          </div>
+                          <div className="text-[10px] text-slate-300">
+                            {rule.action.type === 'tap'
+                              ? `Tap (${rule.action.x}, ${rule.action.y})`
+                              : rule.action.type === 'back'
+                              ? 'Press Back button'
+                              : `Tap range ${rule.action.minX}-${rule.action.maxX}`}
+                            <span className="text-slate-500 ml-2">
+                              • Used {rule.timesTriggered || 0}x
+                            </span>
+                          </div>
+                          {rule.keywords?.length > 0 && (
+                            <div className="text-[9px] text-slate-500 truncate">
+                              Keywords: {rule.keywords.join(', ')}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => handleRenameRule(rule.id)}
+                            className="px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-[10px] border border-slate-800"
+                            title="Rename Screen ID"
+                          >
+                            Rename
+                          </button>
+                          <button
+                            onClick={() => handleDeleteRule(rule.id)}
+                            className="px-2 py-1 rounded bg-slate-900 hover:bg-rose-900/60 text-slate-400 hover:text-rose-200 text-[10px] border border-slate-800"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer with Discord Instructions */}
+            <div className="px-3 py-2 border-t border-slate-800 bg-slate-950/50 text-[10px] text-slate-400 flex items-center justify-between">
+              <span>Discord command: <code className="text-amber-300">rule set &lt;id&gt; tap &lt;x&gt; &lt;y&gt;</code></span>
+              <button
+                onClick={() => setShowRulesModal(false)}
+                className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
