@@ -155,7 +155,7 @@ export class MacroManager {
       macroName: 'start',
       isRunning: false,
       resumeAfterUpdate: false,
-      autoFixacEnabled: false,
+      autoFixacEnabled: true,
       currentStep: 1,
       cycleCount: 0,
       totalStepsExecuted: 0,
@@ -585,14 +585,14 @@ export class MacroManager {
     };
 
     const autoFixacEnabled =
-      isStartMacro && Array.isArray(ctx.args) && ctx.args.some((a) => a.toLowerCase() === 'fixac');
+      isStartMacro && (!Array.isArray(ctx.args) || !ctx.args.some((a) => a.toLowerCase() === 'nofixac'));
 
     if (isLoopMacro) {
       await updateProgress(
         isStartMacro
           ? options?.resumeStep && options.resumeStep > 1
-            ? `${macro.name}${autoFixacEnabled ? ' (auto-fixac)' : ''}: resumed from step ${options.resumeStep} (cycle #${loopCount})`
-            : `${macro.name}${autoFixacEnabled ? ' (auto-fixac every 5–6m)' : ''}: loop started (send \`stop\` to stop before step 1, 7, 13, or 19)`
+            ? `${macro.name} (auto-fixac): resumed from step ${options.resumeStep} (cycle #${loopCount})`
+            : `${macro.name} (auto-fixac every 5–6m): loop started (send \`stop\` to stop before step 1, 7, 13, or 19)`
           : `${macro.name}: loop started (send \`stop\` to stop before step 1)`
       );
     }
