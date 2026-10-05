@@ -1,0 +1,47 @@
+[
+  {
+    "id": "launch_formation",
+    "name": "Launch Formation Dismiss",
+    "keywords": [
+      "launch formation",
+      "launch",
+      "formation"
+    ],
+    "detectionRegion": {
+      "minX": 273,
+      "maxX": 803,
+      "minY": 90,
+      "maxY": 181
+    },
+    "rawOcrSnippet": "Launch Formation",
+    "action": {
+      "type": "sequence",
+      "steps": [
+        {
+          "type": "tap_range",
+          "minX": 36,
+          "maxX": 115,
+          "minY": 94,
+          "maxY": 173
+        },
+        {
+          "type": "wait",
+          "ms": 500
+        },
+        {
+          "type": "tap_range",
+          "minX": 465,
+          "maxX": 602,
+          "minY": 1109,
+          "maxY": 1223
+        },
+        {
+          "type": "wait",
+          "ms": 500
+        }
+      ]
+    },
+    "timesTriggered": 0,
+    "createdAt": "2026-10-05T11:29:00.000Z"
+  }
+]

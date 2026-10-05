@@ -7,14 +7,26 @@ import { CommandContext } from './types';
 import { recognizeLinesWithTimeout, OcrLineResult } from './commands/fixac';
 import { StoragePaths } from './storagePaths';
 
-export interface ScreenRuleAction {
-  type: 'tap' | 'tap_range' | 'back' | 'ignore';
+export interface ScreenRuleActionStep {
+  type: 'tap' | 'tap_range' | 'back' | 'wait';
   x?: number;
   y?: number;
   minX?: number;
   maxX?: number;
   minY?: number;
   maxY?: number;
+  ms?: number;
+}
+
+export interface ScreenRuleAction {
+  type: 'tap' | 'tap_range' | 'back' | 'ignore' | 'sequence';
+  x?: number;
+  y?: number;
+  minX?: number;
+  maxX?: number;
+  minY?: number;
+  maxY?: number;
+  steps?: ScreenRuleActionStep[];
 }
 
 export interface ScreenRule {
@@ -23,6 +35,12 @@ export interface ScreenRule {
   keywords: string[];
   rawOcrSnippet: string;
   action: ScreenRuleAction;
+  detectionRegion?: {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  };
   timesTriggered: number;
   lastTriggeredAt?: string;
   createdAt: string;
@@ -94,6 +112,34 @@ export class ScreenRuleManager {
       console.warn('[ScreenRuleManager] Failed to load screen rules:', err.message);
       this.rules = [];
     }
+
+    // Ensure the Launch Formation dismiss rule is configured
+    const lfIndex = this.rules.findIndex((r) => r.id.toLowerCase() === 'launch_formation');
+    const launchFormationRule: ScreenRule = {
+      id: 'launch_formation',
+      name: 'Launch Formation Dismiss',
+      keywords: ['launch formation', 'launch', 'formation'],
+      detectionRegion: { minX: 273, maxX: 803, minY: 90, maxY: 181 },
+      rawOcrSnippet: 'Launch Formation',
+      action: {
+        type: 'sequence',
+        steps: [
+          { type: 'tap_range', minX: 36, maxX: 115, minY: 94, maxY: 173 },
+          { type: 'wait', ms: 500 },
+          { type: 'tap_range', minX: 465, maxX: 602, minY: 1109, maxY: 1223 },
+          { type: 'wait', ms: 500 }
+        ]
+      },
+      timesTriggered: lfIndex >= 0 ? this.rules[lfIndex].timesTriggered : 0,
+      createdAt: lfIndex >= 0 ? this.rules[lfIndex].createdAt : new Date().toISOString()
+    };
+
+    if (lfIndex >= 0) {
+      this.rules[lfIndex] = launchFormationRule;
+    } else {
+      this.rules.push(launchFormationRule);
+    }
+    this.saveRules();
   }
 
   public saveRules(): void {
@@ -171,15 +217,31 @@ export class ScreenRuleManager {
       for (const rule of this.rules) {
         if (!rule.keywords || rule.keywords.length === 0) continue;
 
-        // Check how many keywords match
-        const matchedKeywords = rule.keywords.filter((kw) => fullText.includes(kw.toLowerCase()));
-        const matchRatio = matchedKeywords.length / rule.keywords.length;
+        let isMatched = false;
 
-        // Matches if at least 60% of keywords (or at least 2) are present
-        const isMatched =
-          rule.keywords.length === 1
-            ? matchedKeywords.length === 1
-            : matchRatio >= 0.6 || matchedKeywords.length >= 2;
+        if (rule.detectionRegion) {
+          const reg = rule.detectionRegion;
+          const regionLines = ocrRes.lines.filter((l) => {
+            const overlapX = l.x1 >= reg.minX && l.x0 <= reg.maxX;
+            const overlapY = l.y1 >= reg.minY && l.y0 <= reg.maxY;
+            return overlapX && overlapY;
+          });
+          const regionText = regionLines.map((l) => l.text).join(' ').toLowerCase();
+          const matchedKw = rule.keywords.filter((kw) =>
+            regionText.includes(kw.toLowerCase()) || fullText.includes(kw.toLowerCase())
+          );
+          isMatched = matchedKw.length > 0;
+        } else {
+          // Check how many keywords match
+          const matchedKeywords = rule.keywords.filter((kw) => fullText.includes(kw.toLowerCase()));
+          const matchRatio = matchedKeywords.length / rule.keywords.length;
+
+          // Matches if at least 60% of keywords (or at least 2) are present
+          isMatched =
+            rule.keywords.length === 1
+              ? matchedKeywords.length === 1
+              : matchRatio >= 0.6 || matchedKeywords.length >= 2;
+        }
 
         if (isMatched) {
           // Execute the user-defined action
@@ -196,6 +258,24 @@ export class ScreenRuleManager {
           } else if (rule.action.type === 'back') {
             await adb.keyEvent(4); // Android KEYCODE_BACK
             tapRes = { back: true };
+          } else if (rule.action.type === 'sequence' && rule.action.steps) {
+            for (const s of rule.action.steps) {
+              if (s.type === 'tap' && s.x !== undefined && s.y !== undefined) {
+                tapRes = await adb.tap(s.x, s.y);
+              } else if (s.type === 'tap_range') {
+                tapRes = await adb.tapRandomRange(
+                  s.minX ?? 0,
+                  s.maxX ?? 100,
+                  s.minY ?? 0,
+                  s.maxY ?? 100
+                );
+              } else if (s.type === 'back') {
+                await adb.keyEvent(4);
+                tapRes = { back: true };
+              } else if (s.type === 'wait') {
+                await new Promise((resolve) => setTimeout(resolve, s.ms || 500));
+              }
+            }
           }
 
           rule.timesTriggered = (rule.timesTriggered || 0) + 1;

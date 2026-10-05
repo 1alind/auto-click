@@ -895,9 +895,48 @@ export class MacroManager {
                   await updateProgress(`${macro.name}: step ${stepNumber} clicked ${targetName} (${(match.score * 100).toFixed(1)}%)`);
                 }
               } else if (isStartMacro) {
+                // 1. Check screen rules FIRST (e.g. Launch Formation screen or unexpected modal)
+                const earlyRuleCheck = await screenRuleManager.checkAndExecuteRule(adb);
+                if (earlyRuleCheck.matched && earlyRuleCheck.rule) {
+                  lastRescuedStep = i;
+                  consecutiveRescuesOnStep++;
+                  const actionDesc =
+                    earlyRuleCheck.rule.action.type === 'sequence'
+                      ? 'Closed Launch Formation (Back) and clicked center of screen (RAB)'
+                      : earlyRuleCheck.rule.action.type === 'tap'
+                      ? `Tapped (${earlyRuleCheck.rule.action.x}, ${earlyRuleCheck.rule.action.y})`
+                      : earlyRuleCheck.rule.action.type === 'back'
+                      ? 'Pressed Back button'
+                      : `Tapped range ${earlyRuleCheck.rule.action.minX}-${earlyRuleCheck.rule.action.maxX}`;
+
+                  ctx.log(
+                    `🛡️ Screen Rule Handled: Recognized "${earlyRuleCheck.rule.id}"! ${actionDesc}. Resuming loop...`,
+                    'info'
+                  );
+                  if (webhook.isConfigured()) {
+                    await webhook
+                      .send({
+                        content: `🛡️ **Screen Rule Solved**: Recognized \`${earlyRuleCheck.rule.id}\`! ${actionDesc}. Resuming loop...`
+                      })
+                      .catch(() => {});
+                  }
+
+                  const roundIndex = Math.min(3, Math.floor(i / 6));
+                  const roundBaseStepIdx = roundIndex * 6;
+                  const roundAsBtnStepIdx = roundBaseStepIdx + 2;
+
+                  if (earlyRuleCheck.rule.id.toLowerCase() === 'launch_formation') {
+                    // Center of screen was tapped, now proceed directly to click asbtn.png
+                    i = roundAsBtnStepIdx - 1;
+                    continue;
+                  }
+
+                  await sleep(500);
+                  i--;
+                  continue;
+                }
+
                 // One-by-one button recovery for `start`:
-                // Check which button is currently on screen (including Step 1's 100×100 RAM image ONLY when other buttons aren't found),
-                // click the first one found, and continue from its step!
                 const roundIndex = Math.min(3, Math.floor(i / 6)); // 0: steps 1-6, 1: steps 7-12, 2: steps 13-18, 3: steps 19-24
                 const roundBaseStepIdx = roundIndex * 6; // 0, 6, 12, or 18 (Step 1, 7, 13, or 19)
                 const roundAsBtnStepIdx = roundBaseStepIdx + 2; // 2, 8, 14, or 20 (Step 3, 9, 15, or 21)
