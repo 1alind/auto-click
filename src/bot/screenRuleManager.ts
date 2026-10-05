@@ -297,11 +297,9 @@ export class ScreenRuleManager {
   }
 
   /**
-   * When an unknown screen blocks a macro:
+   * When an unknown screen or missing image blocks a macro:
    * 1. Captures a full-screen screenshot
-   * 2. Extracts unique text & generates a screen ID
-   * 3. Sends full screenshot & instructions to Discord
-   * 4. Stores it as latestPendingScreen so user can easily configure it
+   * 2. Sends the failure alert and screenshot image to Discord
    */
   public async handleUnknownScreen(
     adb: AdbController,
@@ -310,31 +308,12 @@ export class ScreenRuleManager {
     contextInfo: { macroName: string; stepNumber: number; targetName: string }
   ): Promise<PendingUnknownScreen> {
     const screenshot = await adb.screencap();
-    let fullText = '';
-    let ocrLines: OcrLineResult[] = [];
-
-    try {
-      const ocrRes = await recognizeLinesWithTimeout(screenshot, 0, 0, 1, 5000);
-      fullText = ocrRes.fullText || '';
-      ocrLines = ocrRes.lines || [];
-    } catch (err: any) {
-      ctx.log(`Local OCR during unknown screen check: ${err.message}`, 'warn');
-    }
-
-    const keywords = this.extractUniqueKeywords(fullText);
-    const suggestedId = this.generateScreenId(keywords);
-
-    const snippetLines = ocrLines
-      .slice(0, 4)
-      .map((l) => l.text.trim())
-      .filter(Boolean);
-    const ocrSnippet = snippetLines.join(' | ') || (fullText ? fullText.slice(0, 120) : 'No readable text');
 
     const pending: PendingUnknownScreen = {
-      id: suggestedId,
-      keywords,
-      fullText,
-      ocrSnippet,
+      id: `screen_${Date.now().toString().slice(-6)}`,
+      keywords: [],
+      fullText: '',
+      ocrSnippet: '',
       screenshotBuffer: screenshot,
       macroName: contextInfo.macroName,
       stepNumber: contextInfo.stepNumber,
@@ -344,38 +323,17 @@ export class ScreenRuleManager {
 
     this.latestPendingScreen = pending;
 
-    // Save screenshot directly to SD card rules folder so it is preserved across app updates
-    try {
-      const savedPngPath = path.join(StoragePaths.getRulesDir(), `screen_${suggestedId}.png`);
-      fs.writeFileSync(savedPngPath, screenshot);
-    } catch (err: any) {
-      ctx.log(`Could not write screen_${suggestedId}.png to rules folder: ${err.message}`, 'warn');
-    }
+    const msg = `❌ **Target Not Found**\n• **Macro**: \`${contextInfo.macroName}\` (Step ${contextInfo.stepNumber} looking for \`${contextInfo.targetName}\`)\n• Screenshot attached below:`;
 
-    const keywordsDisplay = keywords.length > 0 ? keywords.map((k) => `\`${k}\``).join(', ') : '*(None detected)*';
-    const msg = [
-      `📸 **Unknown Screen Blocked Macro!**`,
-      `• **Macro**: \`${contextInfo.macroName}\` (Step ${contextInfo.stepNumber} looking for \`${contextInfo.targetName}\`)`,
-      `• **Assigned Screen ID**: \`${suggestedId}\``,
-      `• **Unique Info / Keywords**: ${keywordsDisplay}`,
-      `• **Detected Text**: \`${ocrSnippet}\`\n`,
-      `⚙️ **Set what happens when this screen appears**:`,
-      `👉 **Tap Coordinate**: \`rule set ${suggestedId} tap <x> <y>\``,
-      `👉 **Tap Range**: \`rule set ${suggestedId} tap <minX-maxX> <minY-maxY>\``,
-      `👉 **Press Back Button**: \`rule set ${suggestedId} back\``,
-      `👉 **Change Screen ID**: \`rule id <new_id>\` or \`rule set <custom_id> tap <x> <y>\``,
-      `*(Tip: You can also just type \`rule set tap <x> <y>\` to configure this latest screen!)*`
-    ].join('\n');
-
-    ctx.log(`Unknown screen detected: [${suggestedId}]. Sending full-screen screenshot to Discord...`, 'warn');
+    ctx.log(`Target not found in ${contextInfo.macroName} step ${contextInfo.stepNumber} (${contextInfo.targetName}). Sending screenshot to Discord...`, 'warn');
 
     if (webhook.isConfigured()) {
       await webhook.send({
         content: msg,
         fileBuffer: screenshot,
-        fileName: `unknown_screen_${suggestedId}_${Date.now()}.png`
+        fileName: `screen_${Date.now()}.png`
       }).catch((err) => {
-        ctx.log(`Failed to upload unknown screen to Discord: ${err.message}`, 'error');
+        ctx.log(`Failed to upload screenshot to Discord: ${err.message}`, 'error');
       });
     } else if (ctx.reply) {
       await ctx.reply(msg);

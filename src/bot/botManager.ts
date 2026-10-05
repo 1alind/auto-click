@@ -10,7 +10,6 @@ import { fixacCommand, textsCommand } from './commands/fixac';
 import { subCommand } from './commands/sub';
 import { aiCommand } from './commands/ai';
 import { moveCommand } from './commands/move';
-import { ruleCommand } from './commands/rule';
 import {
   tapCommand,
   screenshotCommand,
@@ -130,7 +129,6 @@ export class BotManager {
     this.discord.registerCommand(liveCommand);
     this.discord.registerCommand(aiCommand);
     this.discord.registerCommand(moveCommand);
-    this.discord.registerCommand(ruleCommand);
     this.discord.registerCommand(clearCommand);
 
     // Load and register all saved custom macros as direct commands (e.g. "start")

@@ -910,16 +910,9 @@ export class MacroManager {
                       : `Tapped range ${earlyRuleCheck.rule.action.minX}-${earlyRuleCheck.rule.action.maxX}`;
 
                   ctx.log(
-                    `🛡️ Screen Rule Handled: Recognized "${earlyRuleCheck.rule.id}"! ${actionDesc}. Resuming loop...`,
+                    `🛡️ Screen Rule Handled: Recognized "${earlyRuleCheck.rule.id}"! ${actionDesc}. Resuming loop quietly...`,
                     'info'
                   );
-                  if (webhook.isConfigured()) {
-                    await webhook
-                      .send({
-                        content: `🛡️ **Screen Rule Solved**: Recognized \`${earlyRuleCheck.rule.id}\`! ${actionDesc}. Resuming loop...`
-                      })
-                      .catch(() => {});
-                  }
 
                   const roundIndex = Math.min(3, Math.floor(i / 6));
                   const roundBaseStepIdx = roundIndex * 6;
@@ -1023,7 +1016,9 @@ export class MacroManager {
                       lastRescuedStep = i;
                       consecutiveRescuesOnStep++;
                       const actionDesc =
-                        ruleCheck.rule.action.type === 'tap'
+                        ruleCheck.rule.action.type === 'sequence'
+                          ? 'Executed sequence action'
+                          : ruleCheck.rule.action.type === 'tap'
                           ? `Tapped (${ruleCheck.rule.action.x}, ${ruleCheck.rule.action.y})`
                           : ruleCheck.rule.action.type === 'back'
                           ? 'Pressed Back button'
@@ -1032,13 +1027,6 @@ export class MacroManager {
                         `🛡️ Screen Rule Handled: Recognized "${ruleCheck.rule.id}"! ${actionDesc}. Resuming step ${stepNumber}...`,
                         'info'
                       );
-                      if (webhook.isConfigured()) {
-                        await webhook
-                          .send({
-                            content: `🛡️ **Screen Rule Solved**: Recognized \`${ruleCheck.rule.id}\`! ${actionDesc} (triggered ${ruleCheck.rule.timesTriggered} times). Resuming...`
-                          })
-                          .catch(() => {});
-                      }
                       await sleep(800);
                       i--; // Retry current step
                       continue;
@@ -1082,7 +1070,9 @@ export class MacroManager {
                     lastRescuedStep = i;
                     consecutiveRescuesOnStep++;
                     const actionDesc =
-                      ruleCheck.rule.action.type === 'tap'
+                      ruleCheck.rule.action.type === 'sequence'
+                        ? 'Executed sequence action'
+                        : ruleCheck.rule.action.type === 'tap'
                         ? `Tapped (${ruleCheck.rule.action.x}, ${ruleCheck.rule.action.y})`
                         : ruleCheck.rule.action.type === 'back'
                         ? 'Pressed Back button'
@@ -1091,13 +1081,6 @@ export class MacroManager {
                       `🛡️ Screen Rule Handled: Recognized "${ruleCheck.rule.id}"! ${actionDesc}. Resuming step ${stepNumber}...`,
                       'info'
                     );
-                    if (webhook.isConfigured()) {
-                      await webhook
-                        .send({
-                          content: `🛡️ **Screen Rule Solved**: Recognized \`${ruleCheck.rule.id}\`! ${actionDesc} (triggered ${ruleCheck.rule.timesTriggered} times). Resuming...`
-                        })
-                        .catch(() => {});
-                    }
                     await sleep(800);
                     i--; // Retry current step
                     continue;
