@@ -7,8 +7,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let activeAcPollId = 0;
 
-// Multi-scale range covering 0.55x (heavily zoomed out) to 1.70x (heavily zoomed in)
-const WIDE_ZOOM_SCALES = [0.55, 0.65, 0.75, 0.85, 0.95, 1.0, 1.08, 1.20, 1.35, 1.50, 1.70];
+// Multi-scale range covering 0.50x (heavily zoomed out) to 1.65x (heavily zoomed in)
+const WIDE_ZOOM_SCALES = [0.50, 0.60, 0.70, 0.80, 0.90, 1.0, 1.10, 1.25, 1.45, 1.65];
 
 /**
  * Searches for a template image with multi-scale zoom resilience.
@@ -18,12 +18,12 @@ async function matchWithZoomResilience(
   rawScreen: any,
   imagePath: string,
   preferredRegion?: { minX: number; maxX: number; minY: number; maxY: number },
-  threshold = 0.65
+  threshold = 0.58
 ) {
   if (preferredRegion) {
     // 1. Try with expanded margin around preferred region
-    const marginX = 80;
-    const marginY = 80;
+    const marginX = 120;
+    const marginY = 120;
     const expandedRegion = {
       minX: Math.max(0, preferredRegion.minX - marginX),
       maxX: preferredRegion.maxX + marginX,
@@ -42,7 +42,7 @@ async function matchWithZoomResilience(
 
   // 2. Full-screen fallback search across all zoom scales
   return await TemplateMatcher.matchRaw(rawScreen, imagePath, {
-    threshold: Math.max(0.60, threshold - 0.03),
+    threshold: Math.max(0.52, threshold - 0.04),
     scales: WIDE_ZOOM_SCALES
   });
 }
@@ -173,8 +173,8 @@ async function checkTimerExistsInRegion(adb: any): Promise<{ exists: boolean; te
     const ocrRes = await recognizeLinesWithTimeout(cropBuf, cropX, cropY, 2, 5000);
     const text = (ocrRes.fullText || ocrRes.lines.map((l) => l.text).join(' ')).trim();
 
-    // Check if it contains digits / timer markers (e.g. 04:30, 4:30, 00:45, or numbers)
-    const hasTimer = /\d{1,2}[:;]\d{2}/.test(text) || /\d+m|\d+s/i.test(text) || /\d{2,}/.test(text);
+    // Check if it strictly contains a countdown timer (e.g. 00:00:00, 01:23:45, or 04:30)
+    const hasTimer = /\b\d{1,2}[:;]\d{2}[:;]\d{2}\b/.test(text) || /\b\d{1,2}[:;]\d{2}\b/.test(text);
     return { exists: hasTimer, text };
   } catch {
     return { exists: false, text: '' };
@@ -461,8 +461,18 @@ export const moveCommand: CommandDefinition = {
           ctx.log(`Tapped (${tapPostRepair.x}, ${tapPostRepair.y}) in 939-1062 2175-2302`, 'info');
           await sleep(600);
         } else {
-          ctx.log('Prompt "Yes" not found, continuing regular clicks...', 'info');
-          await sleep(300);
+          ctx.log('Prompt "Yes" not found on first check, retrying in 500ms...', 'info');
+          await sleep(500);
+          const retryYes = await checkTextInRegion(
+            adb,
+            { minX: 579, maxX: 970, minY: 1707, maxY: 1799 },
+            'Yes'
+          );
+          if (!retryYes.found && acd1Path) {
+            const reason = 'Neither acd1.png button nor "Yes" repair prompt was found on screen.';
+            await sendFailureScreenshot(adb, webhook, ctx, 6, reason);
+            return { success: false, message: `Stuck at step 6: ${reason}` };
+          }
         }
       }
 
@@ -476,31 +486,42 @@ export const moveCommand: CommandDefinition = {
 
       let tapX7 = Math.floor((576 + 849) / 2);
       let tapY7 = Math.floor((1407 + 1499) / 2);
+      let match2Found = false;
 
       if (acd2Path) {
-        const match2 = await matchWithZoomResilience(
+        let match2 = await matchWithZoomResilience(
           rawScreen,
           acd2Path,
           { minX: 576, maxX: 849, minY: 1407, maxY: 1499 },
-          0.65
+          0.58
         );
+
+        if (!match2.found) {
+          await sleep(600);
+          rawScreen = await adb.screencapRaw();
+          match2 = await matchWithZoomResilience(
+            rawScreen,
+            acd2Path,
+            { minX: 576, maxX: 849, minY: 1407, maxY: 1499 },
+            0.55
+          );
+        }
+
         if (match2.found) {
+          match2Found = true;
           tapX7 = match2.targetPoint.x;
           tapY7 = match2.targetPoint.y;
           ctx.log(`acd2.png verified! Matched at (${tapX7}, ${tapY7}) with score ${(match2.score * 100).toFixed(1)}% (scale ${match2.scale}x)`, 'info');
         } else {
-          ctx.log(`acd2.png match score ${(match2.score * 100).toFixed(1)}% (< 65%)`, 'warn');
+          const reason = `acd2.png not matched on screen (best score ${(match2.score * 100).toFixed(1)}%)`;
+          await sendFailureScreenshot(adb, webhook, ctx, 7, reason);
+          return { success: false, message: `Stuck at step 7: ${reason}` };
         }
       }
 
-      const tap7 = await adb.tapRandomRange(
-        Math.max(576, tapX7 - 15),
-        Math.min(849, tapX7 + 15),
-        Math.max(1407, tapY7 - 10),
-        Math.min(1499, tapY7 + 10)
-      );
+      const tap7 = await adb.tap(tapX7, tapY7);
       ctx.log(`Tapped (${tap7.x}, ${tap7.y}) for acd2.png`, 'info');
-      await sleep(500);
+      await sleep(600);
 
       // =========================================================================
       // STEP 8: Verify with acd3.png across all zoom levels then click it
@@ -512,29 +533,40 @@ export const moveCommand: CommandDefinition = {
 
       let tapX8 = Math.floor((597 + 970) / 2);
       let tapY8 = Math.floor((2181 + 2299) / 2);
+      let match3Found = false;
 
       if (acd3Path) {
-        const match3 = await matchWithZoomResilience(
+        let match3 = await matchWithZoomResilience(
           rawScreen,
           acd3Path,
           { minX: 597, maxX: 970, minY: 2181, maxY: 2299 },
-          0.65
+          0.58
         );
+
+        if (!match3.found) {
+          await sleep(600);
+          rawScreen = await adb.screencapRaw();
+          match3 = await matchWithZoomResilience(
+            rawScreen,
+            acd3Path,
+            { minX: 597, maxX: 970, minY: 2181, maxY: 2299 },
+            0.55
+          );
+        }
+
         if (match3.found) {
+          match3Found = true;
           tapX8 = match3.targetPoint.x;
           tapY8 = match3.targetPoint.y;
           ctx.log(`acd3.png verified! Matched at (${tapX8}, ${tapY8}) with score ${(match3.score * 100).toFixed(1)}% (scale ${match3.scale}x)`, 'info');
         } else {
-          ctx.log(`acd3.png match score ${(match3.score * 100).toFixed(1)}% (< 65%)`, 'warn');
+          const reason = `acd3.png not matched on screen (best score ${(match3.score * 100).toFixed(1)}%)`;
+          await sendFailureScreenshot(adb, webhook, ctx, 8, reason);
+          return { success: false, message: `Stuck at step 8: ${reason}` };
         }
       }
 
-      const tap8 = await adb.tapRandomRange(
-        Math.max(597, tapX8 - 15),
-        Math.min(970, tapX8 + 15),
-        Math.max(2181, tapY8 - 10),
-        Math.min(2299, tapY8 + 10)
-      );
+      const tap8 = await adb.tap(tapX8, tapY8);
       ctx.log(`Tapped (${tap8.x}, ${tap8.y}) for acd3.png`, 'info');
 
       // =========================================================================
