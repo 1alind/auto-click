@@ -1,0 +1,177 @@
+[
+  {
+    "name": "start",
+    "description": "Custom macro with visual matching on asbtn.png and as1–as4.png (loops continuously)",
+    "createdAt": "2026-10-05T15:54:09.357Z",
+    "steps": [
+      {
+        "type": "tap_range",
+        "minX": 465,
+        "maxX": 602,
+        "minY": 1109,
+        "maxY": 1223,
+        "label": "Random Tap X=[465..602], Y=[1109..1223]"
+      },
+      {
+        "type": "wait",
+        "ms": 600,
+        "label": "Wait 600ms"
+      },
+      {
+        "type": "locate_and_tap",
+        "refPath": "asbtn.png",
+        "minX": 771,
+        "maxX": 840,
+        "minY": 1107,
+        "maxY": 1176,
+        "label": "Match asbtn.png in X=[771..840], Y=[1107..1176] & tap"
+      },
+      {
+        "type": "wait",
+        "ms": 600,
+        "label": "Wait 600ms"
+      },
+      {
+        "type": "locate_and_tap",
+        "refPath": "as1.png",
+        "minX": 230,
+        "maxX": 309,
+        "minY": 1625,
+        "maxY": 1704,
+        "label": "Match as1.png in X=[230..309], Y=[1625..1704] & tap"
+      },
+      {
+        "type": "wait",
+        "ms": 600,
+        "label": "Wait 600ms"
+      },
+      {
+        "type": "tap_range",
+        "minX": 465,
+        "maxX": 602,
+        "minY": 1109,
+        "maxY": 1223,
+        "label": "Random Tap X=[465..602], Y=[1109..1223]"
+      },
+      {
+        "type": "wait",
+        "ms": 600,
+        "label": "Wait 600ms"
+      },
+      {
+        "type": "locate_and_tap",
+        "refPath": "asbtn.png",
+        "minX": 771,
+        "maxX": 840,
+        "minY": 1107,
+        "maxY": 1176,
+        "label": "Match asbtn.png in X=[771..840], Y=[1107..1176] & tap"
+      },
+      {
+        "type": "wait",
+        "ms": 600,
+        "label": "Wait 600ms"
+      },
+      {
+        "type": "locate_and_tap",
+        "refPath": "as2.png",
+        "minX": 337,
+        "maxX": 416,
+        "minY": 1622,
+        "maxY": 1701,
+        "label": "Match as2.png in X=[337..416], Y=[1622..1701] & tap"
+      },
+      {
+        "type": "wait",
+        "ms": 600,
+        "label": "Wait 600ms"
+      },
+      {
+        "type": "tap_range",
+        "minX": 465,
+        "maxX": 602,
+        "minY": 1109,
+        "maxY": 1223,
+        "label": "Random Tap X=[465..602], Y=[1109..1223]"
+      },
+      {
+        "type": "wait",
+        "ms": 600,
+        "label": "Wait 600ms"
+      },
+      {
+        "type": "locate_and_tap",
+        "refPath": "asbtn.png",
+        "minX": 771,
+        "maxX": 840,
+        "minY": 1107,
+        "maxY": 1176,
+        "label": "Match asbtn.png in X=[771..840], Y=[1107..1176] & tap"
+      },
+      {
+        "type": "wait",
+        "ms": 600,
+        "label": "Wait 600ms"
+      },
+      {
+        "type": "locate_and_tap",
+        "refPath": "as3.png",
+        "minX": 439,
+        "maxX": 518,
+        "minY": 1628,
+        "maxY": 1707,
+        "label": "Match as3.png in X=[439..518], Y=[1628..1707] & tap"
+      },
+      {
+        "type": "wait",
+        "ms": 600,
+        "label": "Wait 600ms"
+      },
+      {
+        "type": "tap_range",
+        "minX": 465,
+        "maxX": 602,
+        "minY": 1109,
+        "maxY": 1223,
+        "label": "Random Tap X=[465..602], Y=[1109..1223]"
+      },
+      {
+        "type": "wait",
+        "ms": 600,
+        "label": "Wait 600ms"
+      },
+      {
+        "type": "locate_and_tap",
+        "refPath": "asbtn.png",
+        "minX": 771,
+        "maxX": 840,
+        "minY": 1107,
+        "maxY": 1176,
+        "label": "Match asbtn.png in X=[771..840], Y=[1107..1176] & tap"
+      },
+      {
+        "type": "wait",
+        "ms": 600,
+        "label": "Wait 600ms"
+      },
+      {
+        "type": "locate_and_tap",
+        "refPath": "as4.png",
+        "minX": 546,
+        "maxX": 625,
+        "minY": 1623,
+        "maxY": 1702,
+        "label": "Match as4.png in X=[546..625], Y=[1623..1702] & tap"
+      },
+      {
+        "type": "wait",
+        "ms": 600,
+        "label": "Wait 600ms"
+      },
+      {
+        "type": "loop",
+        "label": "Loop from step 1"
+      }
+    ]
+  }
+]

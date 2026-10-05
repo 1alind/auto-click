@@ -222,6 +222,7 @@ export class DiscordBotClient {
           username: message.author.username
         },
         channelId: message.channelId,
+        discordMessage: message,
         reply: async (replyText: string) => {
           try {
             const { botManager } = await import('./botManager');

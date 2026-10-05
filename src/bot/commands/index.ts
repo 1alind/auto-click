@@ -1370,6 +1370,7 @@ export const helpCommand: CommandDefinition = {
       '• `screenshot` — capture full screen, crop `X Y` area, or save to sdcard (`help screenshot`)',
       '• `images` — send all saved images & names from `/sdcard/autoclick/` (`help images`)',
       '• `connect` / `pair` / `devices` — wireless ADB connection tools (`help connect`)',
+      '• `clear` / `purge` — delete recent messages from the Discord channel',
       '• `status` — check ADB device & bot status',
       '• `update` / `check-update` / `restart` — GitHub auto-updater & process control',
       `• custom commands: ${customList}`
@@ -1379,3 +1380,5 @@ export const helpCommand: CommandDefinition = {
     return { success: true, message: manualOverview };
   }
 };
+
+export { clearCommand } from './clear';

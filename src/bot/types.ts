@@ -53,6 +53,7 @@ export interface CommandContext {
     username: string;
   };
   channelId?: string;
+  discordMessage?: any;
   reply?: (message: string) => Promise<any>;
   log: (message: string, level?: 'info' | 'warn' | 'error' | 'step', meta?: any) => void;
   notifyStep?: (step: number, title: string, description: string, status?: 'running' | 'completed' | 'failed', data?: any) => void;

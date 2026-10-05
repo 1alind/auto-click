@@ -1277,11 +1277,11 @@ export class MacroManager {
           {
             type: 'locate_and_tap',
             refPath: 'as1.png',
-            minX: 445,
-            maxX: 515,
-            minY: 1627,
-            maxY: 1696,
-            label: 'Match as1.png in X=[445..515], Y=[1627..1696] & tap'
+            minX: 230,
+            maxX: 309,
+            minY: 1625,
+            maxY: 1704,
+            label: 'Match as1.png in X=[230..309], Y=[1625..1704] & tap'
           },
           {
             type: 'wait',
@@ -1318,11 +1318,11 @@ export class MacroManager {
           {
             type: 'locate_and_tap',
             refPath: 'as2.png',
-            minX: 550,
-            maxX: 619,
-            minY: 1627,
-            maxY: 1696,
-            label: 'Match as2.png in X=[550..619], Y=[1627..1696] & tap'
+            minX: 337,
+            maxX: 416,
+            minY: 1622,
+            maxY: 1701,
+            label: 'Match as2.png in X=[337..416], Y=[1622..1701] & tap'
           },
           {
             type: 'wait',
@@ -1359,11 +1359,11 @@ export class MacroManager {
           {
             type: 'locate_and_tap',
             refPath: 'as3.png',
-            minX: 656,
-            maxX: 725,
-            minY: 1629,
-            maxY: 1698,
-            label: 'Match as3.png in X=[656..725], Y=[1629..1698] & tap'
+            minX: 439,
+            maxX: 518,
+            minY: 1628,
+            maxY: 1707,
+            label: 'Match as3.png in X=[439..518], Y=[1628..1707] & tap'
           },
           {
             type: 'wait',
@@ -1400,11 +1400,11 @@ export class MacroManager {
           {
             type: 'locate_and_tap',
             refPath: 'as4.png',
-            minX: 757,
-            maxX: 833,
-            minY: 1627,
-            maxY: 1698,
-            label: 'Match as4.png in X=[757..833], Y=[1627..1698] & tap'
+            minX: 546,
+            maxX: 625,
+            minY: 1623,
+            maxY: 1702,
+            label: 'Match as4.png in X=[546..625], Y=[1623..1702] & tap'
           },
           {
             type: 'wait',
@@ -1455,11 +1455,11 @@ export class MacroManager {
         ) {
           step.type = 'locate_and_tap';
           step.refPath = 'as1.png';
-          step.minX = 445;
-          step.maxX = 515;
-          step.minY = 1627;
-          step.maxY = 1696;
-          step.label = 'Match as1.png in X=[445..515], Y=[1627..1696] & tap';
+          step.minX = 230;
+          step.maxX = 309;
+          step.minY = 1625;
+          step.maxY = 1704;
+          step.label = 'Match as1.png in X=[230..309], Y=[1625..1704] & tap';
           updated = true;
         }
         if (
@@ -1469,31 +1469,31 @@ export class MacroManager {
         ) {
           step.type = 'locate_and_tap';
           step.refPath = 'as2.png';
-          step.minX = 550;
-          step.maxX = 619;
-          step.minY = 1627;
-          step.maxY = 1696;
-          step.label = 'Match as2.png in X=[550..619], Y=[1627..1696] & tap';
+          step.minX = 337;
+          step.maxX = 416;
+          step.minY = 1622;
+          step.maxY = 1701;
+          step.label = 'Match as2.png in X=[337..416], Y=[1622..1701] & tap';
           updated = true;
         }
         if (step.type === 'locate_and_tap' && step.refPath === 'as3.png') {
           step.type = 'locate_and_tap';
           step.refPath = 'as3.png';
-          step.minX = 656;
-          step.maxX = 725;
-          step.minY = 1629;
-          step.maxY = 1698;
-          step.label = 'Match as3.png in X=[656..725], Y=[1629..1698] & tap';
+          step.minX = 439;
+          step.maxX = 518;
+          step.minY = 1628;
+          step.maxY = 1707;
+          step.label = 'Match as3.png in X=[439..518], Y=[1628..1707] & tap';
           updated = true;
         }
         if (step.type === 'locate_and_tap' && step.refPath === 'as4.png') {
           step.type = 'locate_and_tap';
           step.refPath = 'as4.png';
-          step.minX = 757;
-          step.maxX = 833;
-          step.minY = 1627;
-          step.maxY = 1698;
-          step.label = 'Match as4.png in X=[757..833], Y=[1627..1698] & tap';
+          step.minX = 546;
+          step.maxX = 625;
+          step.minY = 1623;
+          step.maxY = 1702;
+          step.label = 'Match as4.png in X=[546..625], Y=[1623..1702] & tap';
           updated = true;
         }
       }
