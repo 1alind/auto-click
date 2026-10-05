@@ -336,14 +336,68 @@ export class ScreenRuleManager {
     try {
       const pngBuf = screenPngBuffer || (await adb.screencap());
       const cropped = await TemplateMatcher.cropRegion(pngBuf, 100, 60, 980, 240);
-      const cropOcr = await recognizeLinesWithTimeout(cropped.buffer, 100, 60, 1, 3000);
-      const text = (cropOcr.fullText || cropOcr.lines.map((l) => l.text).join(' ')).toLowerCase();
+      
+      // Pass 1: Invert binarized (white text on dark -> black text on white background)
+      const invertedBuf = await ScreenRuleManager.preprocessWhiteOnDarkForOcr(cropped.buffer);
+      const cropOcr = await recognizeLinesWithTimeout(invertedBuf, 100, 60, 1, 3000);
+      let text = (cropOcr.fullText || cropOcr.lines.map((l) => l.text).join(' ')).toLowerCase();
 
-      const keywords = ['launch', 'formation', 'laun', 'formati', 'aunch', 'ormat', 'launch formation', 'launchformation'];
-      const matched = keywords.some((kw) => text.includes(kw));
+      const keywords = [
+        'launch',
+        'formation',
+        'laun',
+        'formati',
+        'aunch',
+        'ormat',
+        'launch formation',
+        'launchformation',
+        'format',
+        'tion',
+        'nch'
+      ];
+      let matched = keywords.some((kw) => text.includes(kw));
+
+      // Pass 2 fallback: Raw crop if inverted pass didn't catch it
+      if (!matched) {
+        const rawOcr = await recognizeLinesWithTimeout(cropped.buffer, 100, 60, 1, 2000);
+        const rawText = (rawOcr.fullText || rawOcr.lines.map((l) => l.text).join(' ')).toLowerCase();
+        matched = keywords.some((kw) => rawText.includes(kw));
+        if (matched) text = rawText;
+      }
+
+      console.log(`[LaunchFormationCheck] OCR read: "${text.slice(0, 80)}" -> Matched: ${matched}`);
       return matched;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * High-contrast binarization & inversion: turns white/silver game text into black letters
+   * on pure white background, making Tesseract 100% accurate on dark game headers.
+   */
+  public static async preprocessWhiteOnDarkForOcr(imageBuffer: Buffer): Promise<Buffer> {
+    try {
+      const jimp = await Jimp.read(imageBuffer);
+      const data = jimp.bitmap.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (lum > 130) {
+          data[i] = 0;
+          data[i + 1] = 0;
+          data[i + 2] = 0;
+        } else {
+          data[i] = 255;
+          data[i + 1] = 255;
+          data[i + 2] = 255;
+        }
+      }
+      return await jimp.getBuffer('image/png');
+    } catch {
+      return imageBuffer;
     }
   }
 

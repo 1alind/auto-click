@@ -155,7 +155,7 @@ export const screenshotCommand: CommandDefinition = {
     }
 
     if (region) {
-      const cropped = await TemplateMatcher.cropRegion(screenBuffer, region.minX, region.maxX, region.minY, region.maxY);
+      const cropped = await TemplateMatcher.cropRegion(screenBuffer, region.minX, region.minY, region.maxX, region.maxY);
       finalBuffer = cropped.buffer;
       isRegionCrop = true;
       labelText = `**cropped** *X:${region.minX}–${region.maxX}, Y:${region.minY}–${region.maxY} (${cropped.width}×${cropped.height})*`;

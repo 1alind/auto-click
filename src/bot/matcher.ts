@@ -500,8 +500,8 @@ export class TemplateMatcher {
   public static async cropRegion(
     imageBuffer: Buffer,
     minX: number,
-    maxX: number,
     minY: number,
+    maxX: number,
     maxY: number
   ): Promise<{ buffer: Buffer; width: number; height: number }> {
     const image = await Jimp.read(imageBuffer);
