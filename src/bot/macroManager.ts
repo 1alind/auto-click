@@ -896,7 +896,8 @@ export class MacroManager {
                 }
               } else if (isStartMacro) {
                 // 1. Check screen rules FIRST (e.g. Launch Formation screen or unexpected modal)
-                const earlyRuleCheck = await screenRuleManager.checkAndExecuteRule(adb);
+                const screenPng = await TemplateMatcher.cropRawToPng(rawScreen);
+                const earlyRuleCheck = await screenRuleManager.checkAndExecuteRule(adb, screenPng);
                 if (earlyRuleCheck.matched && earlyRuleCheck.rule) {
                   lastRescuedStep = i;
                   consecutiveRescuesOnStep++;
@@ -1011,7 +1012,7 @@ export class MacroManager {
                 if (!recovered) {
                   // Check if this screen matches any user-configured screen rules (Zero AI)
                   if (consecutiveRescuesOnStep < 2) {
-                    const ruleCheck = await screenRuleManager.checkAndExecuteRule(adb);
+                    const ruleCheck = await screenRuleManager.checkAndExecuteRule(adb, screenPng);
                     if (ruleCheck.matched && ruleCheck.rule) {
                       lastRescuedStep = i;
                       consecutiveRescuesOnStep++;
@@ -1064,8 +1065,9 @@ export class MacroManager {
                   return { success: false, message: errorMsg, steps: stepsLog };
                 }
               } else {
+                const screenPng = await TemplateMatcher.cropRawToPng(rawScreen);
                 if (consecutiveRescuesOnStep < 2) {
-                  const ruleCheck = await screenRuleManager.checkAndExecuteRule(adb);
+                  const ruleCheck = await screenRuleManager.checkAndExecuteRule(adb, screenPng);
                   if (ruleCheck.matched && ruleCheck.rule) {
                     lastRescuedStep = i;
                     consecutiveRescuesOnStep++;

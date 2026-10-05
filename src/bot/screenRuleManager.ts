@@ -6,6 +6,7 @@ import { WebhookService } from './webhook';
 import { CommandContext } from './types';
 import { recognizeLinesWithTimeout, OcrLineResult } from './commands/fixac';
 import { StoragePaths } from './storagePaths';
+import { TemplateMatcher } from './matcher';
 
 export interface ScreenRuleActionStep {
   type: 'tap' | 'tap_range' | 'back' | 'wait';
@@ -211,82 +212,111 @@ export class ScreenRuleManager {
 
     try {
       const pngBuf = screenPngBuffer || (await adb.screencap());
-      const ocrRes = await recognizeLinesWithTimeout(pngBuf, 0, 0, 1, 4500);
-      const fullText = (ocrRes.fullText || ocrRes.lines.map((l) => l.text).join(' ')).toLowerCase();
 
+      // 1. Fast path: Check rules with detectionRegion first using fast cropped OCR (~30ms)
       for (const rule of this.rules) {
         if (!rule.keywords || rule.keywords.length === 0) continue;
 
-        let isMatched = false;
-
         if (rule.detectionRegion) {
           const reg = rule.detectionRegion;
-          const regionLines = ocrRes.lines.filter((l) => {
-            const overlapX = l.x1 >= reg.minX && l.x0 <= reg.maxX;
-            const overlapY = l.y1 >= reg.minY && l.y0 <= reg.maxY;
-            return overlapX && overlapY;
-          });
-          const regionText = regionLines.map((l) => l.text).join(' ').toLowerCase();
-          const matchedKw = rule.keywords.filter((kw) =>
-            regionText.includes(kw.toLowerCase()) || fullText.includes(kw.toLowerCase())
-          );
-          isMatched = matchedKw.length > 0;
-        } else {
-          // Check how many keywords match
+          try {
+            const cropped = await TemplateMatcher.cropRegion(pngBuf, reg.minX, reg.minY, reg.maxX, reg.maxY);
+            const cropOcr = await recognizeLinesWithTimeout(cropped.buffer, reg.minX, reg.minY, 1, 3000);
+            const cropText = (cropOcr.fullText || cropOcr.lines.map((l) => l.text).join(' ')).toLowerCase();
+            const matchedKw = rule.keywords.filter((kw) => cropText.includes(kw.toLowerCase()));
+
+            if (matchedKw.length > 0) {
+              let tapRes: any = null;
+              if (rule.action.type === 'tap' && rule.action.x !== undefined && rule.action.y !== undefined) {
+                tapRes = await adb.tap(rule.action.x, rule.action.y);
+              } else if (rule.action.type === 'tap_range') {
+                tapRes = await adb.tapRandomRange(
+                  rule.action.minX ?? 0,
+                  rule.action.maxX ?? 100,
+                  rule.action.minY ?? 0,
+                  rule.action.maxY ?? 100
+                );
+              } else if (rule.action.type === 'back') {
+                await adb.keyEvent(4); // Android KEYCODE_BACK
+                tapRes = { back: true };
+              } else if (rule.action.type === 'sequence' && rule.action.steps) {
+                for (const s of rule.action.steps) {
+                  if (s.type === 'tap' && s.x !== undefined && s.y !== undefined) {
+                    tapRes = await adb.tap(s.x, s.y);
+                  } else if (s.type === 'tap_range') {
+                    tapRes = await adb.tapRandomRange(
+                      s.minX ?? 0,
+                      s.maxX ?? 100,
+                      s.minY ?? 0,
+                      s.maxY ?? 100
+                    );
+                  } else if (s.type === 'back') {
+                    await adb.keyEvent(4);
+                    tapRes = { back: true };
+                  } else if (s.type === 'wait') {
+                    await new Promise((resolve) => setTimeout(resolve, s.ms || 500));
+                  }
+                }
+              }
+
+              rule.timesTriggered = (rule.timesTriggered || 0) + 1;
+              rule.lastTriggeredAt = new Date().toISOString();
+              this.saveRules();
+
+              return {
+                matched: true,
+                rule,
+                tapResult: tapRes
+              };
+            }
+          } catch (cropErr: any) {
+            console.warn(`[ScreenRuleManager] Error checking region for ${rule.id}:`, cropErr.message);
+          }
+        }
+      }
+
+      // 2. Slow fallback for generic rules without detectionRegion
+      const genericRules = this.rules.filter((r) => !r.detectionRegion);
+      if (genericRules.length > 0) {
+        const ocrRes = await recognizeLinesWithTimeout(pngBuf, 0, 0, 1, 4500);
+        const fullText = (ocrRes.fullText || ocrRes.lines.map((l) => l.text).join(' ')).toLowerCase();
+
+        for (const rule of genericRules) {
+          if (!rule.keywords || rule.keywords.length === 0) continue;
           const matchedKeywords = rule.keywords.filter((kw) => fullText.includes(kw.toLowerCase()));
           const matchRatio = matchedKeywords.length / rule.keywords.length;
 
-          // Matches if at least 60% of keywords (or at least 2) are present
-          isMatched =
+          const isMatched =
             rule.keywords.length === 1
               ? matchedKeywords.length === 1
               : matchRatio >= 0.6 || matchedKeywords.length >= 2;
-        }
 
-        if (isMatched) {
-          // Execute the user-defined action
-          let tapRes: any = null;
-          if (rule.action.type === 'tap' && rule.action.x !== undefined && rule.action.y !== undefined) {
-            tapRes = await adb.tap(rule.action.x, rule.action.y);
-          } else if (rule.action.type === 'tap_range') {
-            tapRes = await adb.tapRandomRange(
-              rule.action.minX ?? 0,
-              rule.action.maxX ?? 100,
-              rule.action.minY ?? 0,
-              rule.action.maxY ?? 100
-            );
-          } else if (rule.action.type === 'back') {
-            await adb.keyEvent(4); // Android KEYCODE_BACK
-            tapRes = { back: true };
-          } else if (rule.action.type === 'sequence' && rule.action.steps) {
-            for (const s of rule.action.steps) {
-              if (s.type === 'tap' && s.x !== undefined && s.y !== undefined) {
-                tapRes = await adb.tap(s.x, s.y);
-              } else if (s.type === 'tap_range') {
-                tapRes = await adb.tapRandomRange(
-                  s.minX ?? 0,
-                  s.maxX ?? 100,
-                  s.minY ?? 0,
-                  s.maxY ?? 100
-                );
-              } else if (s.type === 'back') {
-                await adb.keyEvent(4);
-                tapRes = { back: true };
-              } else if (s.type === 'wait') {
-                await new Promise((resolve) => setTimeout(resolve, s.ms || 500));
-              }
+          if (isMatched) {
+            let tapRes: any = null;
+            if (rule.action.type === 'tap' && rule.action.x !== undefined && rule.action.y !== undefined) {
+              tapRes = await adb.tap(rule.action.x, rule.action.y);
+            } else if (rule.action.type === 'tap_range') {
+              tapRes = await adb.tapRandomRange(
+                rule.action.minX ?? 0,
+                rule.action.maxX ?? 100,
+                rule.action.minY ?? 0,
+                rule.action.maxY ?? 100
+              );
+            } else if (rule.action.type === 'back') {
+              await adb.keyEvent(4);
+              tapRes = { back: true };
             }
+
+            rule.timesTriggered = (rule.timesTriggered || 0) + 1;
+            rule.lastTriggeredAt = new Date().toISOString();
+            this.saveRules();
+
+            return {
+              matched: true,
+              rule,
+              tapResult: tapRes
+            };
           }
-
-          rule.timesTriggered = (rule.timesTriggered || 0) + 1;
-          rule.lastTriggeredAt = new Date().toISOString();
-          this.saveRules();
-
-          return {
-            matched: true,
-            rule,
-            tapResult: tapRes
-          };
         }
       }
     } catch (err: any) {
