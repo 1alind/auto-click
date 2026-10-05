@@ -415,18 +415,14 @@ export const connectCommand: CommandDefinition = {
     const result = await adb.connectTcp(target);
     if (result.success) {
       botManager.updateConfig({ adbHost: target, adbSerial: target });
-      const output = `connected ${target}`;
+      const output = `connected to ${target}`;
       if (ctx.reply) await ctx.reply(output);
       return { success: true, message: output, data: result };
     }
 
-    // If direct connect failed, fall back to nmap scan (30000-40000) & 10s auto-retry loop
-    const autoFound = await adb.autoConnectWithRetry();
-    if (autoFound) {
-      botManager.updateConfig({ adbHost: autoFound, adbSerial: autoFound });
-      return { success: true, message: `connected ${autoFound}` };
-    }
-    return { success: false, message: 'connection failed' };
+    const output = `failed to connect to ${target}: ${result.message}`;
+    if (ctx.reply) await ctx.reply(output);
+    return { success: false, message: output, data: result };
   }
 };
 

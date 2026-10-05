@@ -316,11 +316,16 @@ export class AdbController {
   }
 
   /**
-   * Normalizes any port or host:port input to always use 127.0.0.1:<port>.
+   * Normalizes any port or host:port input to always use appropriate IP:port.
+   * Preserves full IPs (e.g. 192.168.1.5:41235) while defaulting raw ports (e.g. "41235") to 127.0.0.1:<port>.
    */
   public static normalizeHost(rawHost: string): string {
     const clean = rawHost.trim();
-    const portMatch = clean.match(/(?:^|:)(\d{2,5})$/);
+    if (!clean) return '';
+    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{2,5}$/.test(clean)) {
+      return clean;
+    }
+    const portMatch = clean.match(/^:?(\d{2,5})$/);
     if (portMatch) {
       return `127.0.0.1:${portMatch[1]}`;
     }
@@ -419,6 +424,7 @@ export class AdbController {
 
   /**
    * Connects to ADB over TCP/IP (Wireless debugging).
+   * Automatically handles direct IP, localhost, wlan0 IP, and flushes stale server sockets if hung.
    */
   public async connectTcp(targetHost: string): Promise<{ success: boolean; message: string }> {
     const isAdb = await this.isAdbAvailable();
@@ -427,26 +433,85 @@ export class AdbController {
     }
 
     const host = AdbController.normalizeHost(targetHost);
+    const clean = targetHost.trim();
+    const portMatch = clean.match(/(\d{2,5})$/);
+    const port = portMatch ? portMatch[1] : '';
 
-    try {
-      await execPromise('adb start-server').catch(() => {});
-      const { stdout, stderr } = await execPromise(`adb connect ${host}`);
+    await execPromise('adb start-server').catch(() => {});
+
+    const tryConnect = async (target: string): Promise<{ success: boolean; output: string }> => {
+      const { stdout, stderr } = await execPromise(`adb connect ${target}`).catch((e) => ({
+        stdout: e.stdout || '',
+        stderr: e.stderr || e.message || ''
+      }));
       const output = `${stdout} ${stderr}`.trim();
       const lower = output.toLowerCase();
-      const success =
+      const isSuccess =
         (lower.includes('connected to') || lower.includes('already connected')) &&
-        !lower.includes('unable to connect') &&
-        !lower.includes('failed to connect') &&
-        !lower.includes('cannot connect');
+        !lower.includes('unable') &&
+        !lower.includes('failed') &&
+        !lower.includes('cannot') &&
+        !lower.includes('refused');
 
-      if (success) {
+      if (isSuccess) {
+        const devices = await this.getDevices().catch(() => []);
+        const isOnline = devices.some((d) => (d.serial === target || (port && d.serial.endsWith(`:${port}`))) && d.state === 'device');
+        if (isOnline) {
+          return { success: true, output };
+        }
+      }
+      return { success: false, output };
+    };
+
+    // 1. Try directly with normalized target
+    let res = await tryConnect(host);
+    if (res.success) {
+      this.host = host;
+      this.serial = host;
+      await this.ensureWirelessDebuggingEnabled().catch(() => {});
+      return { success: true, message: `connected to ${host}` };
+    }
+
+    // 2. If it's a port on device, try localhost & wlan0 IP bindings
+    if (port) {
+      const candidates: string[] = [`localhost:${port}`, `127.0.0.1:${port}`];
+      try {
+        const { stdout: ipOut } = await execPromise('ip -4 addr show wlan0 2>/dev/null || ifconfig wlan0 2>/dev/null || getprop dhcp.wlan0.ipaddress 2>/dev/null');
+        const matches = ipOut.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) || [];
+        for (const ip of matches) {
+          if (ip !== '127.0.0.1' && !ip.endsWith('.255')) {
+            candidates.push(`${ip}:${port}`);
+          }
+        }
+      } catch {}
+
+      for (const cand of candidates) {
+        if (cand === host) continue;
+        res = await tryConnect(cand);
+        if (res.success) {
+          this.host = cand;
+          this.serial = cand;
+          await this.ensureWirelessDebuggingEnabled().catch(() => {});
+          return { success: true, message: `connected to ${cand}` };
+        }
+      }
+    }
+
+    // 3. If stale ADB socket issue, restart adb server once and retry
+    try {
+      await execPromise('adb kill-server').catch(() => {});
+      await new Promise((r) => setTimeout(r, 400));
+      await execPromise('adb start-server').catch(() => {});
+      res = await tryConnect(host);
+      if (res.success) {
         this.host = host;
         this.serial = host;
+        await this.ensureWirelessDebuggingEnabled().catch(() => {});
+        return { success: true, message: `connected to ${host}` };
       }
-      return { success, message: output || (success ? `connected to ${host}` : 'connect failed') };
-    } catch (err: any) {
-      return { success: false, message: err.message || 'connect failed' };
-    }
+    } catch {}
+
+    return { success: false, message: res.output || `unable to connect to ${host}` };
   }
 
   /**
