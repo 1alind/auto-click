@@ -705,7 +705,13 @@ export class MacroManager {
       });
     }
 
+    let consecutiveRescuesOnStep = 0;
+    let lastRescuedStep = -1;
+
     for (let i = initialIndex; i < macro.steps.length; i++) {
+      if (lastRescuedStep !== i) {
+        consecutiveRescuesOnStep = 0;
+      }
       const step = macro.steps[i];
       const stepNumber = i + 1;
       const isStopBoundary =
@@ -1040,53 +1046,65 @@ export class MacroManager {
                 }
 
                 if (!recovered) {
-                  // =========================================================================
-                  // STEP A: Offline Prompt Memory (0 AI calls, 5ms from sdcard)
-                  // =========================================================================
-                  const offlineLearned = await aiLearner.checkAndExecuteLearnedPrompt(adb);
-                  if (offlineLearned.found && offlineLearned.prompt) {
-                    ctx.log(
-                      `🧠 Offline Prompt Memory: Recognized learned prompt "${offlineLearned.prompt.name}" from sdcard! Tapped (${offlineLearned.prompt.clickX}, ${offlineLearned.prompt.clickY}). Resuming...`,
-                      'info'
-                    );
-                    if (webhook.isConfigured()) {
-                      await webhook
-                        .send({
-                          content: `🧠 **Offline Prompt Solved**: Recognized \`${offlineLearned.prompt.name}\` from sdcard! Tapped \`(${offlineLearned.prompt.clickX}, ${offlineLearned.prompt.clickY})\` (reused ${offlineLearned.prompt.timesUsed} times). Resuming...`
-                        })
-                        .catch(() => {});
-                    }
-                    await sleep(800);
-                    i--; // Retry current step
-                    continue;
-                  }
-
-                  // =========================================================================
-                  // STEP B: Gemini AI Vision Rescue & Self-Learning to SDCard
-                  // =========================================================================
-                  const hasApiKey = Boolean(process.env.GEMINI_API_KEY || config.geminiApiKey);
-                  if (hasApiKey) {
-                    ctx.log(`🤖 Step ${stepNumber} blocked — asking Gemini Vision to analyze unexpected prompt...`, 'info');
-                    const aiRescue = await aiLearner.rescueWithGeminiAndLearn(adb, {
-                      customApiKey: config.geminiApiKey,
-                      customModel: config.geminiModel,
-                      currentAction: `Executing macro "${macro.name}" step ${stepNumber}: looking for "${targetName}"`,
-                      log: (msg, lvl) => ctx.log(msg, lvl || 'info')
-                    });
-
-                    if (aiRescue.success && aiRescue.promptDetected && aiRescue.clickCoords) {
-                      ctx.log(`🎉 AI Rescue Success: ${aiRescue.message}`, 'info');
+                  // Only allow prompt rescues up to 3 times on the same step to prevent infinite loops
+                  if (consecutiveRescuesOnStep < 3) {
+                    // =========================================================================
+                    // STEP A: Offline Prompt Memory (0 AI calls, 5ms from sdcard)
+                    // =========================================================================
+                    const offlineLearned = await aiLearner.checkAndExecuteLearnedPrompt(adb);
+                    if (offlineLearned.found && offlineLearned.prompt) {
+                      lastRescuedStep = i;
+                      consecutiveRescuesOnStep++;
+                      ctx.log(
+                        `🧠 Offline Prompt Memory: Recognized learned prompt "${offlineLearned.prompt.name}" from sdcard! Tapped (${offlineLearned.prompt.clickX}, ${offlineLearned.prompt.clickY}). Resuming (attempt ${consecutiveRescuesOnStep}/3)...`,
+                        'info'
+                      );
                       if (webhook.isConfigured()) {
                         await webhook
                           .send({
-                            content: `🤖 **AI Learned New Prompt**: \`${aiRescue.name}\`!\n• Action: ${aiRescue.description}\n• Tapped: \`(${aiRescue.clickCoords.x}, ${aiRescue.clickCoords.y})\`\n• 💾 **Saved to sdcard**: will be handled 100% offline in future without AI!`
+                            content: `🧠 **Offline Prompt Solved**: Recognized \`${offlineLearned.prompt.name}\` from sdcard! Tapped \`(${offlineLearned.prompt.clickX}, ${offlineLearned.prompt.clickY})\` (reused ${offlineLearned.prompt.timesUsed} times). Resuming...`
                           })
                           .catch(() => {});
                       }
-                      await sleep(1200);
+                      await sleep(800);
                       i--; // Retry current step
                       continue;
                     }
+
+                    // =========================================================================
+                    // STEP B: Gemini AI Vision Rescue & Self-Learning to SDCard
+                    // =========================================================================
+                    const hasApiKey = Boolean(process.env.GEMINI_API_KEY || config.geminiApiKey);
+                    if (hasApiKey) {
+                      ctx.log(`🤖 Step ${stepNumber} blocked — asking Gemini Vision to analyze unexpected prompt...`, 'info');
+                      const aiRescue = await aiLearner.rescueWithGeminiAndLearn(adb, {
+                        customApiKey: config.geminiApiKey,
+                        customModel: config.geminiModel,
+                        currentAction: `Executing macro "${macro.name}" step ${stepNumber}: looking for "${targetName}"`,
+                        log: (msg, lvl) => ctx.log(msg, lvl || 'info')
+                      });
+
+                      if (aiRescue.success && aiRescue.promptDetected && aiRescue.clickCoords) {
+                        lastRescuedStep = i;
+                        consecutiveRescuesOnStep++;
+                        ctx.log(`🎉 AI Rescue Success: ${aiRescue.message}`, 'info');
+                        if (webhook.isConfigured()) {
+                          await webhook
+                            .send({
+                              content: `🤖 **AI Learned New Prompt**: \`${aiRescue.name}\`!\n• Action: ${aiRescue.description}\n• Tapped: \`(${aiRescue.clickCoords.x}, ${aiRescue.clickCoords.y})\`\n• 💾 **Saved to sdcard**: will be handled 100% offline in future without AI!`
+                            })
+                            .catch(() => {});
+                        }
+                        await sleep(1200);
+                        i--; // Retry current step
+                        continue;
+                      }
+                    }
+                  } else {
+                    ctx.log(
+                      `⚠️ Prompt rescue already attempted ${consecutiveRescuesOnStep} times on step ${stepNumber} without clearing block. Proceeding to normal error handling.`,
+                      'warn'
+                    );
                   }
 
                   const scorePct = match.score * 100;
@@ -1122,33 +1140,44 @@ export class MacroManager {
                   return { success: false, message: errorMsg, steps: stepsLog };
                 }
               } else {
-                // Check offline learned prompts first
-                const offlineLearned = await aiLearner.checkAndExecuteLearnedPrompt(adb);
-                if (offlineLearned.found && offlineLearned.prompt) {
-                  ctx.log(
-                    `🧠 Offline Prompt Memory: Recognized learned prompt "${offlineLearned.prompt.name}"! Tapped (${offlineLearned.prompt.clickX}, ${offlineLearned.prompt.clickY}). Resuming...`,
-                    'info'
-                  );
-                  await sleep(800);
-                  i--;
-                  continue;
-                }
-
-                // Ask Gemini AI
-                const hasApiKey = Boolean(process.env.GEMINI_API_KEY || config.geminiApiKey);
-                if (hasApiKey) {
-                  const aiRescue = await aiLearner.rescueWithGeminiAndLearn(adb, {
-                    customApiKey: config.geminiApiKey,
-                    customModel: config.geminiModel,
-                    currentAction: `Executing macro "${macro.name}" step ${stepNumber}: looking for "${targetName}"`,
-                    log: (msg, lvl) => ctx.log(msg, lvl || 'info')
-                  });
-                  if (aiRescue.success && aiRescue.promptDetected && aiRescue.clickCoords) {
-                    ctx.log(`🎉 AI Rescue Success: ${aiRescue.message}`, 'info');
-                    await sleep(1200);
+                if (consecutiveRescuesOnStep < 3) {
+                  // Check offline learned prompts first
+                  const offlineLearned = await aiLearner.checkAndExecuteLearnedPrompt(adb);
+                  if (offlineLearned.found && offlineLearned.prompt) {
+                    lastRescuedStep = i;
+                    consecutiveRescuesOnStep++;
+                    ctx.log(
+                      `🧠 Offline Prompt Memory: Recognized learned prompt "${offlineLearned.prompt.name}"! Tapped (${offlineLearned.prompt.clickX}, ${offlineLearned.prompt.clickY}). Resuming (attempt ${consecutiveRescuesOnStep}/3)...`,
+                      'info'
+                    );
+                    await sleep(800);
                     i--;
                     continue;
                   }
+
+                  // Ask Gemini AI
+                  const hasApiKey = Boolean(process.env.GEMINI_API_KEY || config.geminiApiKey);
+                  if (hasApiKey) {
+                    const aiRescue = await aiLearner.rescueWithGeminiAndLearn(adb, {
+                      customApiKey: config.geminiApiKey,
+                      customModel: config.geminiModel,
+                      currentAction: `Executing macro "${macro.name}" step ${stepNumber}: looking for "${targetName}"`,
+                      log: (msg, lvl) => ctx.log(msg, lvl || 'info')
+                    });
+                    if (aiRescue.success && aiRescue.promptDetected && aiRescue.clickCoords) {
+                      lastRescuedStep = i;
+                      consecutiveRescuesOnStep++;
+                      ctx.log(`🎉 AI Rescue Success: ${aiRescue.message}`, 'info');
+                      await sleep(1200);
+                      i--;
+                      continue;
+                    }
+                  }
+                } else {
+                  ctx.log(
+                    `⚠️ Prompt rescue already attempted ${consecutiveRescuesOnStep} times on step ${stepNumber} without clearing block. Proceeding to normal error handling.`,
+                    'warn'
+                  );
                 }
 
                 const scorePct = match.score * 100;
