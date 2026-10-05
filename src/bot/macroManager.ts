@@ -912,21 +912,16 @@ export class MacroManager {
                     stepIdx: roundAsNumStepIdx,
                     refName: macro.steps[roundAsNumStepIdx]?.refPath || `as${roundIndex + 1}.png`,
                     region: {
-                      minX: macro.steps[roundAsNumStepIdx]?.minX ?? 445,
-                      maxX: macro.steps[roundAsNumStepIdx]?.maxX ?? 833,
-                      minY: macro.steps[roundAsNumStepIdx]?.minY ?? 1627,
-                      maxY: macro.steps[roundAsNumStepIdx]?.maxY ?? 1698
+                      minX: macro.steps[roundAsNumStepIdx]?.minX ?? 230,
+                      maxX: macro.steps[roundAsNumStepIdx]?.maxX ?? 625,
+                      minY: macro.steps[roundAsNumStepIdx]?.minY ?? 1622,
+                      maxY: macro.steps[roundAsNumStepIdx]?.maxY ?? 1707
                     }
                   },
                   {
                     stepIdx: roundAsBtnStepIdx,
                     refName: 'asbtn.png',
                     region: { minX: 771, maxX: 840, minY: 1107, maxY: 1176 }
-                  },
-                  {
-                    stepIdx: roundBaseStepIdx,
-                    refName: 'ram://step1.png',
-                    region: { minX: 430, maxX: 640, minY: 1060, maxY: 1270 }
                   }
                 ];
 
@@ -1257,8 +1252,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 600,
-            label: 'Wait 600ms'
+            ms: 500,
+            label: 'Wait 500ms'
           },
           {
             type: 'locate_and_tap',
@@ -1271,8 +1266,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 600,
-            label: 'Wait 600ms'
+            ms: 500,
+            label: 'Wait 500ms'
           },
           {
             type: 'locate_and_tap',
@@ -1285,8 +1280,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 600,
-            label: 'Wait 600ms'
+            ms: 500,
+            label: 'Wait 500ms'
           },
           {
             type: 'tap_range',
@@ -1298,8 +1293,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 600,
-            label: 'Wait 600ms'
+            ms: 500,
+            label: 'Wait 500ms'
           },
           {
             type: 'locate_and_tap',
@@ -1312,8 +1307,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 600,
-            label: 'Wait 600ms'
+            ms: 500,
+            label: 'Wait 500ms'
           },
           {
             type: 'locate_and_tap',
@@ -1326,8 +1321,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 600,
-            label: 'Wait 600ms'
+            ms: 500,
+            label: 'Wait 500ms'
           },
           {
             type: 'tap_range',
@@ -1339,8 +1334,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 600,
-            label: 'Wait 600ms'
+            ms: 500,
+            label: 'Wait 500ms'
           },
           {
             type: 'locate_and_tap',
@@ -1353,8 +1348,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 600,
-            label: 'Wait 600ms'
+            ms: 500,
+            label: 'Wait 500ms'
           },
           {
             type: 'locate_and_tap',
@@ -1367,8 +1362,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 600,
-            label: 'Wait 600ms'
+            ms: 500,
+            label: 'Wait 500ms'
           },
           {
             type: 'tap_range',
@@ -1380,8 +1375,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 600,
-            label: 'Wait 600ms'
+            ms: 500,
+            label: 'Wait 500ms'
           },
           {
             type: 'locate_and_tap',
@@ -1394,8 +1389,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 600,
-            label: 'Wait 600ms'
+            ms: 500,
+            label: 'Wait 500ms'
           },
           {
             type: 'locate_and_tap',
@@ -1408,8 +1403,8 @@ export class MacroManager {
           },
           {
             type: 'wait',
-            ms: 600,
-            label: 'Wait 600ms'
+            ms: 500,
+            label: 'Wait 500ms'
           },
           {
             type: 'loop',
@@ -1494,6 +1489,11 @@ export class MacroManager {
           step.minY = 1623;
           step.maxY = 1702;
           step.label = 'Match as4.png in X=[546..625], Y=[1623..1702] & tap';
+          updated = true;
+        }
+        if (step.type === 'wait' && step.ms === 600) {
+          step.ms = 500;
+          step.label = 'Wait 500ms';
           updated = true;
         }
       }
