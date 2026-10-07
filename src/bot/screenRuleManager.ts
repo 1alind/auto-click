@@ -362,10 +362,8 @@ export class ScreenRuleManager {
         const rawOcr = await recognizeLinesWithTimeout(cropped.buffer, 100, 60, 1, 2000);
         const rawText = (rawOcr.fullText || rawOcr.lines.map((l) => l.text).join(' ')).toLowerCase();
         matched = keywords.some((kw) => rawText.includes(kw));
-        if (matched) text = rawText;
       }
 
-      console.log(`[LaunchFormationCheck] OCR read: "${text.slice(0, 80)}" -> Matched: ${matched}`);
       return matched;
     } catch {
       return false;
@@ -432,7 +430,13 @@ export class ScreenRuleManager {
     ctx: CommandContext,
     contextInfo: { macroName: string; stepNumber: number; targetName: string }
   ): Promise<PendingUnknownScreen> {
-    const screenshot = await adb.screencap();
+    let screenshot: Buffer;
+    try {
+      const raw = await adb.screencapRaw();
+      screenshot = await TemplateMatcher.cropRawToPng(raw);
+    } catch {
+      screenshot = await adb.screencap();
+    }
 
     const pending: PendingUnknownScreen = {
       id: `screen_${Date.now().toString().slice(-6)}`,

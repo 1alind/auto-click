@@ -76,6 +76,19 @@ export async function captureCleanErrorScreenshot(
   region?: { minX: number; maxX: number; minY: number; maxY: number },
   rawScreenFallback?: { data: Buffer | Uint8Array; width: number; height: number }
 ): Promise<Buffer | undefined> {
+  if (rawScreenFallback) {
+    try {
+      return await TemplateMatcher.cropRawToPng(rawScreenFallback, region);
+    } catch {}
+  }
+
+  try {
+    const raw = await adb.screencapRaw().catch(() => null);
+    if (raw && raw.data && raw.width) {
+      return await TemplateMatcher.cropRawToPng(raw, region);
+    }
+  } catch {}
+
   try {
     const pngBuf = await adb.screencap().catch(() => null);
     if (pngBuf && pngBuf.length > 500) {
@@ -97,12 +110,6 @@ export async function captureCleanErrorScreenshot(
     console.warn('[ErrorScreenshot] adb.screencap failed, falling back:', err?.message);
   }
 
-  if (rawScreenFallback) {
-    try {
-      const { TemplateMatcher } = await import('./matcher');
-      return await TemplateMatcher.cropRawToPng(rawScreenFallback, region);
-    } catch {}
-  }
   return undefined;
 }
 
@@ -621,10 +628,7 @@ export class MacroManager {
           maxY: 1216
         });
         await TemplateMatcher.setInMemoryTemplate('ram://step1.png', crop100x100);
-        ctx.log('📸 Saved 100×100 px Step 1 reference image in RAM (X:483..583, Y:1116..1216)', 'info');
-      } catch (err: any) {
-        ctx.log(`⚠️ Could not capture initial 100×100 Step 1 RAM image: ${err.message}`, 'warn');
-      }
+      } catch {}
     };
 
     if (isStartMacro) {
@@ -979,11 +983,6 @@ export class MacroManager {
                     region: { minX: 771, maxX: 840, minY: 1107, maxY: 1176 }
                   }
                 ];
-
-                ctx.log(
-                  `🔍 "${targetName}" not found at step ${stepNumber} (${(match.score * 100).toFixed(1)}%) — checking buttons one by one to recover...`,
-                  'warn'
-                );
 
                 let recovered = false;
                 // Try on current screen first, then if none found wait 600ms and re-check once on a fresh screen
