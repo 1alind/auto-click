@@ -420,6 +420,76 @@ export class ScreenRuleManager {
   }
 
   /**
+   * Checks if the "Repair" button appears in Area 1 (X: 566..946, Y: 1707..1801).
+   * If found:
+   * 1. Taps inside Area 1 (566-946, 1707-1801)
+   * 2. Waits 600ms
+   * 3. Checks Area 2 (X: 605..997, Y: 2177..2279) for "Repair"
+   * 4. If found in Area 2, taps inside Area 2 and waits 600ms
+   * Returns true if Repair flow was handled!
+   */
+  public static async checkAndHandleRepairModal(
+    adb: AdbController,
+    screenPngBuffer?: Buffer,
+    ctx?: CommandContext
+  ): Promise<boolean> {
+    try {
+      const pngBuf = screenPngBuffer || (await adb.screencap());
+
+      // 1. Check Area 1: X: 566..946, Y: 1707..1801
+      const cropped1 = await TemplateMatcher.cropRegion(pngBuf, 566, 1707, 946, 1801);
+      const inverted1 = await ScreenRuleManager.preprocessWhiteOnDarkForOcr(cropped1.buffer);
+      const ocr1 = await recognizeLinesWithTimeout(inverted1, 566, 1707, 1, 2500);
+      let text1 = (ocr1.fullText || ocr1.lines.map((l) => l.text).join(' ')).toLowerCase();
+
+      const repairKeywords = ['repair', 'repai', 'repa', 'epair', 'pair'];
+      let matched1 = repairKeywords.some((kw) => text1.includes(kw));
+
+      if (!matched1) {
+        const rawOcr1 = await recognizeLinesWithTimeout(cropped1.buffer, 566, 1707, 1, 2000);
+        text1 = (rawOcr1.fullText || rawOcr1.lines.map((l) => l.text).join(' ')).toLowerCase();
+        matched1 = repairKeywords.some((kw) => text1.includes(kw));
+      }
+
+      if (!matched1) {
+        return false;
+      }
+
+      // Tap Area 1 (First Repair Button)
+      await adb.tapRandomRange(566, 946, 1707, 1801);
+      await new Promise((r) => setTimeout(r, 600));
+
+      // 2. Check Area 2: X: 605..997, Y: 2177..2279
+      try {
+        const raw2 = await adb.screencapRaw();
+        const pngBuf2 = await TemplateMatcher.cropRawToPng(raw2);
+        const cropped2 = await TemplateMatcher.cropRegion(pngBuf2, 605, 2177, 997, 2279);
+        const inverted2 = await ScreenRuleManager.preprocessWhiteOnDarkForOcr(cropped2.buffer);
+        const ocr2 = await recognizeLinesWithTimeout(inverted2, 605, 2177, 1, 2500);
+        let text2 = (ocr2.fullText || ocr2.lines.map((l) => l.text).join(' ')).toLowerCase();
+
+        let matched2 = repairKeywords.some((kw) => text2.includes(kw));
+        if (!matched2) {
+          const rawOcr2 = await recognizeLinesWithTimeout(cropped2.buffer, 605, 2177, 1, 2000);
+          text2 = (rawOcr2.fullText || rawOcr2.lines.map((l) => l.text).join(' ')).toLowerCase();
+          matched2 = repairKeywords.some((kw) => text2.includes(kw));
+        }
+
+        if (matched2) {
+          await adb.tapRandomRange(605, 997, 2177, 2279);
+          await new Promise((r) => setTimeout(r, 600));
+        }
+      } catch (err2: any) {
+        console.warn('[ScreenRuleManager] Error checking second repair area:', err2.message);
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * When an unknown screen or missing image blocks a macro:
    * 1. Captures a full-screen screenshot
    * 2. Sends the failure alert and screenshot image to Discord

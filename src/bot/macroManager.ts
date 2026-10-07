@@ -673,6 +673,16 @@ export class MacroManager {
             continue;
           }
 
+          // Check if Repair modal is open before tapping RAB
+          const repairHandled = await ScreenRuleManager.checkAndHandleRepairModal(adb, screenPng, ctx);
+          if (repairHandled) {
+            const roundIndex = Math.min(3, Math.floor(i / 6));
+            const roundBaseStepIdx = roundIndex * 6;
+            const roundAsBtnStepIdx = roundBaseStepIdx + 2;
+            i = roundAsBtnStepIdx - 1;
+            continue;
+          }
+
           this.saveStartState({
             isRunning: true,
             autoFixacEnabled,
@@ -920,6 +930,57 @@ export class MacroManager {
                   const roundBaseStepIdx = roundIndex * 6;
                   const roundAsBtnStepIdx = roundBaseStepIdx + 2;
                   i = roundAsBtnStepIdx - 1;
+                  continue;
+                }
+
+                // 2. Check for Repair text modal (Area 1: 566-946, 1707-1801 -> Area 2: 605-997, 2177-2279)
+                const repairHandled = await ScreenRuleManager.checkAndHandleRepairModal(adb, screenPng, ctx);
+                if (repairHandled) {
+                  // After repair, check which button of the loop is on screen and continue loop
+                  const freshScreen = await adb.screencapRaw();
+                  const roundIndex = Math.min(3, Math.floor(i / 6));
+                  const roundBaseStepIdx = roundIndex * 6;
+                  const roundAsBtnStepIdx = roundBaseStepIdx + 2;
+                  const roundAsNumStepIdx = roundBaseStepIdx + 4;
+
+                  const repairCandidates = [
+                    {
+                      stepIdx: roundAsNumStepIdx,
+                      refName: macro.steps[roundAsNumStepIdx]?.refPath || `as${roundIndex + 1}.png`,
+                      region: {
+                        minX: macro.steps[roundAsNumStepIdx]?.minX ?? 230,
+                        maxX: macro.steps[roundAsNumStepIdx]?.maxX ?? 625,
+                        minY: macro.steps[roundAsNumStepIdx]?.minY ?? 1622,
+                        maxY: macro.steps[roundAsNumStepIdx]?.maxY ?? 1707
+                      }
+                    },
+                    {
+                      stepIdx: roundAsBtnStepIdx,
+                      refName: 'asbtn.png',
+                      region: { minX: 771, maxX: 840, minY: 1107, maxY: 1176 }
+                    }
+                  ];
+
+                  let recoveredAfterRepair = false;
+                  for (const cand of repairCandidates) {
+                    const candPath = resolveCustomImagePath(cand.refName);
+                    if (!candPath || !fs.existsSync(candPath)) continue;
+                    const candMatch = await TemplateMatcher.matchRaw(freshScreen, candPath, {
+                      scales: [0.7, 0.85, 1.0, 1.15, 1.3],
+                      threshold: effectiveThreshold,
+                      region: cand.region
+                    });
+                    if (candMatch.found) {
+                      await adb.tap(candMatch.targetPoint.x, candMatch.targetPoint.y);
+                      i = cand.stepIdx;
+                      recoveredAfterRepair = true;
+                      break;
+                    }
+                  }
+
+                  if (!recoveredAfterRepair) {
+                    i = roundAsBtnStepIdx - 1;
+                  }
                   continue;
                 }
 
