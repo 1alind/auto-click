@@ -59,50 +59,8 @@ export class AdbController {
    * whenever Wi-Fi disconnects/reconnects or wireless debugging is toggled off.
    */
   public async ensureWirelessDebuggingEnabled(): Promise<boolean> {
-    console.log('[AutoWifiDebug] Checking auto-enable methods for Wireless Debugging...');
-
-    // 1. If Shizuku / rish is available in Termux environment (checks $PATH and common Termux locations)
-    const rishCommands = [
-      { name: 'rish in PATH', cmd: 'export RISH_APPLICATION_ID="com.termux"; rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; setprop ctl.restart adbd; stop adbd; start adbd"' },
-      { name: 'rish in $HOME', cmd: '$HOME/rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"' },
-      { name: 'rish in Termux bin', cmd: '/data/data/com.termux/files/usr/bin/rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"' }
-    ];
-
-    for (const r of rishCommands) {
-      try {
-        console.log(`[AutoWifiDebug] Trying Method 1: Shizuku (${r.name})...`);
-        await execPromise(r.cmd);
-        console.log(`[AutoWifiDebug] ✅ SUCCESS via Method 1: Shizuku (${r.name})!`);
-        return true;
-      } catch (err: any) {
-        console.log(`[AutoWifiDebug] ❌ Method 1 (${r.name}) failed: ${err?.message?.split('\n')[0] || 'not available'}`);
-      }
-    }
-
-    // 2. If root / su is available
+    // 1. Over active ADB session if available: lock to port 5555
     try {
-      console.log('[AutoWifiDebug] Trying Method 2: Root (su)...');
-      await execPromise('su -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; setprop ctl.restart adbd; stop adbd; start adbd"');
-      console.log('[AutoWifiDebug] ✅ SUCCESS via Method 2: Root (su)!');
-      return true;
-    } catch (err: any) {
-      console.log(`[AutoWifiDebug] ❌ Method 2 (su) failed: ${err?.message?.split('\n')[0] || 'not available'}`);
-    }
-
-    // 3. Android settings binary / global settings put directly
-    try {
-      console.log('[AutoWifiDebug] Trying Method 3: Direct settings binary...');
-      await execPromise('settings put global adb_wifi_enabled 1');
-      await execPromise('settings put global adb_enabled 1');
-      console.log('[AutoWifiDebug] ✅ SUCCESS via Method 3: Direct settings binary!');
-      return true;
-    } catch (err: any) {
-      console.log(`[AutoWifiDebug] ❌ Method 3 (settings put) failed: ${err?.message?.split('\n')[0] || 'permission denied'}`);
-    }
-
-    // 4. Over active ADB session if available
-    try {
-      console.log('[AutoWifiDebug] Trying Method 4: Active ADB session (tcpip 5555)...');
       if (this.serial) {
         await execPromise(`adb -s ${this.serial} shell "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1"`);
         await execPromise(`adb -s ${this.serial} tcpip 5555`);
@@ -110,23 +68,16 @@ export class AdbController {
         await execPromise('adb shell "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1"');
         await execPromise('adb tcpip 5555');
       }
-      console.log('[AutoWifiDebug] ✅ SUCCESS via Method 4: Active ADB session!');
       return true;
-    } catch (err: any) {
-      console.log(`[AutoWifiDebug] ❌ Method 4 (adb session) failed: ${err?.message?.split('\n')[0] || 'no device connected'}`);
-    }
+    } catch {}
 
-    // 5. If unprivileged and disconnected: trigger wireless debugging intent to force Android to re-engage listener on saved Wi-Fi
+    // 2. Launch Developer Settings intent to easily toggle Wireless Debugging
     try {
-      console.log('[AutoWifiDebug] Trying Method 5: Developer Settings Intent...');
       await execPromise('am start -a android.settings.APPLICATION_DEVELOPMENT_SETTINGS || am start -a android.settings.WIFI_DEBUGGING_SETTINGS');
-      console.log('[AutoWifiDebug] ✅ Triggered Method 5: Developer Settings Intent');
       return true;
-    } catch (err: any) {
-      console.log(`[AutoWifiDebug] ❌ Method 5 (am start intent) failed: ${err?.message?.split('\n')[0] || 'failed'}`);
+    } catch {
+      return false;
     }
-
-    return false;
   }
 
   /**
