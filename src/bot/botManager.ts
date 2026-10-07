@@ -80,10 +80,6 @@ export class BotManager {
       });
     }
 
-    if (this.config.autoUpdate) {
-      this.autoUpdater.startPeriodicCheck(1, true);
-    }
-
     this.registerDefaultCommands();
     RefImageManager.ensureRefImage().catch((err) => ConsoleLogger.error(err, 'ref image'));
 
@@ -317,7 +313,7 @@ export class BotManager {
       matchThreshold: 0.75,
       scales: [0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0],
       autoStartBot: true,
-      autoUpdate: true,
+      autoUpdate: false,
       githubRepo: 'https://github.com/1alind/auto-click',
       githubToken: process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '',
       updateCheckIntervalMinutes: 1,

@@ -161,16 +161,12 @@ export class AutoUpdater {
 
     // Run initial check after 2 seconds of startup
     setTimeout(async () => {
-      this.log('🔍 Checking GitHub for updates (startup check)...', 'info');
       await this.checkAndApplyUpdateIfAvailable(autoPull);
     }, 2000);
 
     this.timer = setInterval(async () => {
-      this.log('🔍 Checking GitHub for updates (1-minute periodic check)...', 'info');
       await this.checkAndApplyUpdateIfAvailable(autoPull);
     }, intervalMs);
-
-    this.log('⏱️ Auto-updater active (checking GitHub every 1 min)...', 'info');
   }
 
   public stopPeriodicCheck(): void {
