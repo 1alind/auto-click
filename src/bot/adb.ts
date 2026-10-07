@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { exec, execFile } from 'child_process';
 import util from 'util';
 
@@ -57,138 +59,173 @@ export class AdbController {
    * whenever Wi-Fi disconnects/reconnects or wireless debugging is toggled off.
    */
   public async ensureWirelessDebuggingEnabled(): Promise<boolean> {
-    let success = false;
+    console.log('[AutoWifiDebug] Checking auto-enable methods for Wireless Debugging...');
 
     // 1. If Shizuku / rish is available in Termux environment (checks $PATH and common Termux locations)
     const rishCommands = [
-      'export RISH_APPLICATION_ID="com.termux"; rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; setprop ctl.restart adbd; stop adbd; start adbd"',
-      'rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"',
-      '$HOME/rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"',
-      '/data/data/com.termux/files/usr/bin/rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"'
+      { name: 'rish in PATH', cmd: 'export RISH_APPLICATION_ID="com.termux"; rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; setprop ctl.restart adbd; stop adbd; start adbd"' },
+      { name: 'rish in $HOME', cmd: '$HOME/rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"' },
+      { name: 'rish in Termux bin', cmd: '/data/data/com.termux/files/usr/bin/rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"' }
     ];
 
-    for (const cmd of rishCommands) {
+    for (const r of rishCommands) {
       try {
-        await execPromise(cmd);
-        success = true;
-        break;
-      } catch {}
+        console.log(`[AutoWifiDebug] Trying Method 1: Shizuku (${r.name})...`);
+        await execPromise(r.cmd);
+        console.log(`[AutoWifiDebug] ✅ SUCCESS via Method 1: Shizuku (${r.name})!`);
+        return true;
+      } catch (err: any) {
+        console.log(`[AutoWifiDebug] ❌ Method 1 (${r.name}) failed: ${err?.message?.split('\n')[0] || 'not available'}`);
+      }
     }
 
     // 2. If root / su is available
     try {
-      await execPromise('su -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; setprop ctl.restart adbd; stop adbd; start adbd"').catch(() => {});
-      success = true;
-    } catch {}
+      console.log('[AutoWifiDebug] Trying Method 2: Root (su)...');
+      await execPromise('su -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; setprop ctl.restart adbd; stop adbd; start adbd"');
+      console.log('[AutoWifiDebug] ✅ SUCCESS via Method 2: Root (su)!');
+      return true;
+    } catch (err: any) {
+      console.log(`[AutoWifiDebug] ❌ Method 2 (su) failed: ${err?.message?.split('\n')[0] || 'not available'}`);
+    }
 
     // 3. Android settings binary / global settings put directly
     try {
-      await execPromise('settings put global adb_wifi_enabled 1').catch(() => {});
-      await execPromise('settings put global adb_enabled 1').catch(() => {});
-      success = true;
-    } catch {}
+      console.log('[AutoWifiDebug] Trying Method 3: Direct settings binary...');
+      await execPromise('settings put global adb_wifi_enabled 1');
+      await execPromise('settings put global adb_enabled 1');
+      console.log('[AutoWifiDebug] ✅ SUCCESS via Method 3: Direct settings binary!');
+      return true;
+    } catch (err: any) {
+      console.log(`[AutoWifiDebug] ❌ Method 3 (settings put) failed: ${err?.message?.split('\n')[0] || 'permission denied'}`);
+    }
 
     // 4. Over active ADB session if available
     try {
+      console.log('[AutoWifiDebug] Trying Method 4: Active ADB session (tcpip 5555)...');
       if (this.serial) {
-        await execPromise(`adb -s ${this.serial} shell "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1"`).catch(() => {});
-        await execPromise(`adb -s ${this.serial} tcpip 5555`).catch(() => {});
+        await execPromise(`adb -s ${this.serial} shell "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1"`);
+        await execPromise(`adb -s ${this.serial} tcpip 5555`);
       } else {
-        await execPromise('adb shell "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1"').catch(() => {});
-        await execPromise('adb tcpip 5555').catch(() => {});
+        await execPromise('adb shell "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1"');
+        await execPromise('adb tcpip 5555');
       }
-      success = true;
-    } catch {}
+      console.log('[AutoWifiDebug] ✅ SUCCESS via Method 4: Active ADB session!');
+      return true;
+    } catch (err: any) {
+      console.log(`[AutoWifiDebug] ❌ Method 4 (adb session) failed: ${err?.message?.split('\n')[0] || 'no device connected'}`);
+    }
 
     // 5. If unprivileged and disconnected: trigger wireless debugging intent to force Android to re-engage listener on saved Wi-Fi
     try {
-      await execPromise('am start -a android.settings.WIFI_DEBUGGING_SETTINGS').catch(() => {});
-    } catch {}
+      console.log('[AutoWifiDebug] Trying Method 5: Developer Settings Intent...');
+      await execPromise('am start -a android.settings.APPLICATION_DEVELOPMENT_SETTINGS || am start -a android.settings.WIFI_DEBUGGING_SETTINGS');
+      console.log('[AutoWifiDebug] ✅ Triggered Method 5: Developer Settings Intent');
+      return true;
+    } catch (err: any) {
+      console.log(`[AutoWifiDebug] ❌ Method 5 (am start intent) failed: ${err?.message?.split('\n')[0] || 'failed'}`);
+    }
 
-    return success;
+    return false;
+  }
+
+  /**
+   * Executes the auto-enable logic when no open ADB port is found.
+   */
+  public async runWifiDebugTriggerScript(): Promise<boolean> {
+    return await this.ensureWirelessDebuggingEnabled().catch(() => false);
   }
 
   /**
    * Uses nmap and mDNS to scan 127.0.0.1 ports 5555 and 30000-50000 for open Wireless Debugging ports and connects automatically.
+   * If nothing is found on pass 1, it executes enable_wifi_debug.sh and re-scans!
    */
   public async scanWithNmapAndConnect(): Promise<string> {
-    try {
-      // Proactively ensure Wireless Debugging is enabled before scanning
-      await this.ensureWirelessDebuggingEnabled().catch(() => {});
+    const doScanPass = async (): Promise<string> => {
+      try {
+        await execPromise('adb start-server').catch(() => {});
 
-      await execPromise('adb start-server').catch(() => {});
-
-      // Check standard port 5555 first
-      const quickTargets = ['127.0.0.1:5555', 'localhost:5555'];
-      for (const qt of quickTargets) {
-        const { stdout: qOut } = await execPromise(`adb connect ${qt}`).catch(() => ({ stdout: '' }));
-        if (String(qOut).toLowerCase().includes('connected to')) {
-          const devs = await this.getDevices();
-          if (devs.some((d) => d.serial === qt && d.state === 'device')) {
-            this.serial = qt;
-            this.host = qt;
-            await this.ensureWirelessDebuggingEnabled().catch(() => {});
-            return qt;
+        // Check standard port 5555 first
+        const quickTargets = ['127.0.0.1:5555', 'localhost:5555'];
+        for (const qt of quickTargets) {
+          const { stdout: qOut } = await execPromise(`adb connect ${qt}`).catch(() => ({ stdout: '' }));
+          if (String(qOut).toLowerCase().includes('connected to')) {
+            const devs = await this.getDevices();
+            if (devs.some((d) => d.serial === qt && d.state === 'device')) {
+              this.serial = qt;
+              this.host = qt;
+              await this.ensureWirelessDebuggingEnabled().catch(() => {});
+              return qt;
+            }
           }
         }
-      }
 
-      // Check mDNS services if available on Android 11+
-      try {
-        const { stdout: mdnsOut } = await execPromise('adb mdns services').catch(() => ({ stdout: '' }));
-        const mdnsMatches = mdnsOut.match(/127\.0\.0\.1:(\d{4,5})|localhost:(\d{4,5})/gi) || [];
-        for (const matchTarget of mdnsMatches) {
-          const { stdout: connOut } = await execPromise(`adb connect ${matchTarget}`).catch(() => ({ stdout: '' }));
-          if (String(connOut).toLowerCase().includes('connected to')) {
-            const devs = await this.getDevices();
-            if (devs.some((d) => d.serial === matchTarget && d.state === 'device')) {
-              this.serial = matchTarget;
-              this.host = matchTarget;
+        // Check mDNS services if available on Android 11+
+        try {
+          const { stdout: mdnsOut } = await execPromise('adb mdns services').catch(() => ({ stdout: '' }));
+          const mdnsMatches = mdnsOut.match(/127\.0\.0\.1:(\d{4,5})|localhost:(\d{4,5})/gi) || [];
+          for (const matchTarget of mdnsMatches) {
+            const { stdout: connOut } = await execPromise(`adb connect ${matchTarget}`).catch(() => ({ stdout: '' }));
+            if (String(connOut).toLowerCase().includes('connected to')) {
+              const devs = await this.getDevices();
+              if (devs.some((d) => d.serial === matchTarget && d.state === 'device')) {
+                this.serial = matchTarget;
+                this.host = matchTarget;
+                await this.ensureWirelessDebuggingEnabled().catch(() => {});
+                return matchTarget;
+              }
+            }
+          }
+        } catch {}
+
+        // Scan dynamic wireless debugging port range (30000-50000 and 5555) with nmap
+        const { stdout } = await execPromise('nmap -p 5555,30000-50000 --open -T4 127.0.0.1');
+        const openPorts: string[] = [];
+        const regex = /(\d{4,5})\/tcp\s+open/gi;
+        let match: RegExpExecArray | null;
+        while ((match = regex.exec(stdout)) !== null) {
+          openPorts.push(match[1]);
+        }
+
+        for (const port of openPorts) {
+          const target = `127.0.0.1:${port}`;
+          const { stdout: connOut, stderr: connErr } = await execPromise(`adb connect ${target}`).catch((e) => ({
+            stdout: e.stdout || '',
+            stderr: e.stderr || e.message || ''
+          }));
+          const out = `${connOut} ${connErr}`.toLowerCase();
+          if (
+            (out.includes('connected to') || out.includes('already connected')) &&
+            !out.includes('unable') &&
+            !out.includes('failed') &&
+            !out.includes('cannot') &&
+            !out.includes('refused')
+          ) {
+            const devices = await this.getDevices();
+            const isOnline = devices.some((d) => d.serial === target && d.state === 'device');
+            if (isOnline) {
+              this.serial = target;
+              this.host = target;
               await this.ensureWirelessDebuggingEnabled().catch(() => {});
-              return matchTarget;
+              return target;
             }
           }
         }
       } catch {}
+      return '';
+    };
 
-      // Scan dynamic wireless debugging port range (30000-50000 and 5555) with nmap
-      const { stdout } = await execPromise('nmap -p 5555,30000-50000 --open -T4 127.0.0.1');
-      const openPorts: string[] = [];
-      const regex = /(\d{4,5})\/tcp\s+open/gi;
-      let match: RegExpExecArray | null;
-      while ((match = regex.exec(stdout)) !== null) {
-        openPorts.push(match[1]);
-      }
+    // Pass 1: Scan for currently open port
+    let connected = await doScanPass();
+    if (connected) return connected;
 
-      for (const port of openPorts) {
-        const target = `127.0.0.1:${port}`;
-        const { stdout: connOut, stderr: connErr } = await execPromise(`adb connect ${target}`).catch((e) => ({
-          stdout: e.stdout || '',
-          stderr: e.stderr || e.message || ''
-        }));
-        const out = `${connOut} ${connErr}`.toLowerCase();
-        if (
-          (out.includes('connected to') || out.includes('already connected')) &&
-          !out.includes('unable') &&
-          !out.includes('failed') &&
-          !out.includes('cannot') &&
-          !out.includes('refused')
-        ) {
-          const devices = await this.getDevices();
-          const isOnline = devices.some((d) => d.serial === target && d.state === 'device');
-          if (isOnline) {
-            this.serial = target;
-            this.host = target;
-            // Reinforce adb_wifi_enabled & tcpip 5555 over the newly connected session
-            await this.ensureWirelessDebuggingEnabled().catch(() => {});
-            return target;
-          }
-        }
-      }
-    } catch {
-      // nmap or adb error
-    }
-    return '';
+    // Nothing found on Pass 1: Run trigger script (enable_wifi_debug.sh) to start wireless debugging
+    await this.runWifiDebugTriggerScript();
+    await new Promise((r) => setTimeout(r, 1500));
+
+    // Pass 2: Re-scan for newly opened port
+    connected = await doScanPass();
+    return connected;
   }
 
   /**
