@@ -59,42 +59,57 @@ export class AdbController {
   public async ensureWirelessDebuggingEnabled(): Promise<boolean> {
     let success = false;
 
-    // 1. Android settings binary / global settings put
+    // 1. If Shizuku / rish is available in Termux environment (checks $PATH and common Termux locations)
+    const rishCommands = [
+      'export RISH_APPLICATION_ID="com.termux"; rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; setprop ctl.restart adbd; stop adbd; start adbd"',
+      'rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"',
+      '$HOME/rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"',
+      '/data/data/com.termux/files/usr/bin/rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"'
+    ];
+
+    for (const cmd of rishCommands) {
+      try {
+        await execPromise(cmd);
+        success = true;
+        break;
+      } catch {}
+    }
+
+    // 2. If root / su is available
+    try {
+      await execPromise('su -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; setprop ctl.restart adbd; stop adbd; start adbd"').catch(() => {});
+      success = true;
+    } catch {}
+
+    // 3. Android settings binary / global settings put directly
     try {
       await execPromise('settings put global adb_wifi_enabled 1').catch(() => {});
       await execPromise('settings put global adb_enabled 1').catch(() => {});
       success = true;
     } catch {}
 
-    // 2. If Shizuku / rish is available in Termux environment
-    try {
-      await execPromise('rish -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"').catch(() => {});
-      success = true;
-    } catch {}
-
-    // 3. If root / su is available
-    try {
-      await execPromise('su -c "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1; setprop service.adb.tcp.port 5555; stop adbd; start adbd"').catch(() => {});
-      success = true;
-    } catch {}
-
     // 4. Over active ADB session if available
     try {
       if (this.serial) {
-        await execPromise(`adb -s ${this.serial} shell settings put global adb_wifi_enabled 1`).catch(() => {});
+        await execPromise(`adb -s ${this.serial} shell "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1"`).catch(() => {});
         await execPromise(`adb -s ${this.serial} tcpip 5555`).catch(() => {});
       } else {
-        await execPromise('adb shell settings put global adb_wifi_enabled 1').catch(() => {});
+        await execPromise('adb shell "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1"').catch(() => {});
         await execPromise('adb tcpip 5555').catch(() => {});
       }
       success = true;
+    } catch {}
+
+    // 5. If unprivileged and disconnected: trigger wireless debugging intent to force Android to re-engage listener on saved Wi-Fi
+    try {
+      await execPromise('am start -a android.settings.WIFI_DEBUGGING_SETTINGS').catch(() => {});
     } catch {}
 
     return success;
   }
 
   /**
-   * Uses nmap to scan 127.0.0.1 ports 5555 and 30000-50000 for open Wireless Debugging ports and connects automatically.
+   * Uses nmap and mDNS to scan 127.0.0.1 ports 5555 and 30000-50000 for open Wireless Debugging ports and connects automatically.
    */
   public async scanWithNmapAndConnect(): Promise<string> {
     try {
@@ -102,6 +117,41 @@ export class AdbController {
       await this.ensureWirelessDebuggingEnabled().catch(() => {});
 
       await execPromise('adb start-server').catch(() => {});
+
+      // Check standard port 5555 first
+      const quickTargets = ['127.0.0.1:5555', 'localhost:5555'];
+      for (const qt of quickTargets) {
+        const { stdout: qOut } = await execPromise(`adb connect ${qt}`).catch(() => ({ stdout: '' }));
+        if (String(qOut).toLowerCase().includes('connected to')) {
+          const devs = await this.getDevices();
+          if (devs.some((d) => d.serial === qt && d.state === 'device')) {
+            this.serial = qt;
+            this.host = qt;
+            await this.ensureWirelessDebuggingEnabled().catch(() => {});
+            return qt;
+          }
+        }
+      }
+
+      // Check mDNS services if available on Android 11+
+      try {
+        const { stdout: mdnsOut } = await execPromise('adb mdns services').catch(() => ({ stdout: '' }));
+        const mdnsMatches = mdnsOut.match(/127\.0\.0\.1:(\d{4,5})|localhost:(\d{4,5})/gi) || [];
+        for (const matchTarget of mdnsMatches) {
+          const { stdout: connOut } = await execPromise(`adb connect ${matchTarget}`).catch(() => ({ stdout: '' }));
+          if (String(connOut).toLowerCase().includes('connected to')) {
+            const devs = await this.getDevices();
+            if (devs.some((d) => d.serial === matchTarget && d.state === 'device')) {
+              this.serial = matchTarget;
+              this.host = matchTarget;
+              await this.ensureWirelessDebuggingEnabled().catch(() => {});
+              return matchTarget;
+            }
+          }
+        }
+      } catch {}
+
+      // Scan dynamic wireless debugging port range (30000-50000 and 5555) with nmap
       const { stdout } = await execPromise('nmap -p 5555,30000-50000 --open -T4 127.0.0.1');
       const openPorts: string[] = [];
       const regex = /(\d{4,5})\/tcp\s+open/gi;
@@ -129,7 +179,7 @@ export class AdbController {
           if (isOnline) {
             this.serial = target;
             this.host = target;
-            // Reinforce adb_wifi_enabled over the newly connected session
+            // Reinforce adb_wifi_enabled & tcpip 5555 over the newly connected session
             await this.ensureWirelessDebuggingEnabled().catch(() => {});
             return target;
           }
