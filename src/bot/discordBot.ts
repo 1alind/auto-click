@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Events, Message, AttachmentBuilder } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, Events, Message, AttachmentBuilder } from 'discord.js';
 import { CommandContext, CommandDefinition, CommandResult } from './types';
 import { ConsoleLogger } from './consoleLogger';
 import { StoragePaths } from './storagePaths';
@@ -14,6 +14,7 @@ export class DiscordBotClient {
   private dashboardMessageId: string | null = null;
   private lastMediaMessageId: string | null = null;
   private mediaDeleteTimer: NodeJS.Timeout | null = null;
+  private dismissableErrorMsgIds: Set<string> = new Set();
   private isConnecting = false;
   private shouldStayConnected = false;
   private retryTimer: NodeJS.Timeout | null = null;
@@ -32,6 +33,7 @@ export class DiscordBotClient {
     if (options?.prefix) this.prefix = options.prefix;
     if (options?.targetChannelId) this.targetChannelId = options.targetChannelId;
     if (options?.onLog) this.onLogCallback = options.onLog;
+    this.loadDismissableErrorMessages();
   }
 
   public registerCommand(command: CommandDefinition): void {
@@ -93,6 +95,91 @@ export class DiscordBotClient {
         'utf-8'
       );
     } catch {}
+  }
+
+  private getDismissableErrorsPath(): string {
+    return path.join(StoragePaths.getConfigDir(), 'dismissable-errors.json');
+  }
+
+  private loadDismissableErrorMessages(): void {
+    try {
+      const p = this.getDismissableErrorsPath();
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, 'utf-8');
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          this.dismissableErrorMsgIds = new Set(list);
+        }
+      }
+    } catch {}
+  }
+
+  private saveDismissableErrorMessages(): void {
+    try {
+      const p = this.getDismissableErrorsPath();
+      fs.writeFileSync(p, JSON.stringify(Array.from(this.dismissableErrorMsgIds)), 'utf-8');
+    } catch {}
+  }
+
+  public addDismissableErrorMessage(messageId: string): void {
+    this.dismissableErrorMsgIds.add(messageId);
+    this.saveDismissableErrorMessages();
+  }
+
+  public isDismissableErrorMessage(messageId: string): boolean {
+    return this.dismissableErrorMsgIds.has(messageId);
+  }
+
+  public removeDismissableErrorMessage(messageId: string): void {
+    this.dismissableErrorMsgIds.delete(messageId);
+    this.saveDismissableErrorMessages();
+  }
+
+  /**
+   * Sends an error message (like buttons not found or execution failure) as a separate new message.
+   * Registers the message ID so that when ANY reaction is added to it by a user, the bot automatically deletes it.
+   */
+  public async sendErrorMessage(options: {
+    content: string;
+    fileBuffer?: Buffer;
+    fileName?: string;
+  }): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    if (!this.client || !this.client.isReady()) {
+      return { success: false, error: 'Discord Bot is not connected' };
+    }
+
+    try {
+      const textChannel = await this.resolveTargetChannel();
+      if (!textChannel) {
+        return { success: false, error: 'Target channel not accessible' };
+      }
+
+      const files: AttachmentBuilder[] = [];
+      if (options.fileBuffer) {
+        const name = options.fileName || `error_${Date.now()}.png`;
+        files.push(new AttachmentBuilder(options.fileBuffer, { name }));
+      }
+
+      const dismissHint = '\n-# 💡 (react with any emoji to remove this message)';
+      const body = options.content.includes('react with any emoji')
+        ? options.content
+        : `${options.content}${dismissHint}`;
+
+      const sentMsg = await textChannel.send({
+        content: body,
+        files: files.length > 0 ? files : undefined
+      });
+
+      if (sentMsg?.id) {
+        this.addDismissableErrorMessage(sentMsg.id);
+        return { success: true, messageId: sentMsg.id };
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      this.log(`Error sending separate error message: ${err.message}`, 'error');
+      return { success: false, error: err.message };
+    }
   }
 
   public formatContent(raw?: string): string {
@@ -363,9 +450,12 @@ export class DiscordBotClient {
           intents: [
             GatewayIntentBits.Guilds,
             GatewayIntentBits.GuildMessages,
+            GatewayIntentBits.GuildMessageReactions,
+            GatewayIntentBits.DirectMessageReactions,
             GatewayIntentBits.MessageContent,
             GatewayIntentBits.DirectMessages
-          ]
+          ],
+          partials: [Partials.Message, Partials.Channel, Partials.Reaction]
         });
 
         this.setupEventHandlers();
@@ -487,7 +577,16 @@ export class DiscordBotClient {
         discordMessage: message,
         reply: async (replyText: string) => {
           try {
-            await this.updateDashboard({ content: replyText });
+            if (
+              replyText.startsWith('❌') ||
+              replyText.toLowerCase().includes('not found') ||
+              replyText.toLowerCase().startsWith('error:') ||
+              replyText.toLowerCase().startsWith('error ')
+            ) {
+              await this.sendErrorMessage({ content: replyText });
+            } else {
+              await this.updateDashboard({ content: replyText });
+            }
           } catch (e: any) {
             this.log(`Failed to update dashboard message: ${e.message}`, 'warn');
           }
@@ -511,7 +610,7 @@ export class DiscordBotClient {
         ConsoleLogger.error(err, `command ${commandKey}`);
         this.log(`Error executing command ${commandKey}: ${err.message}`, 'error', err);
         try {
-          await this.updateDashboard({ content: `error: ${err.message}` });
+          await this.sendErrorMessage({ content: `❌ error executing ${commandKey}: ${err.message}` });
         } catch {
           // ignore
         }
@@ -544,10 +643,6 @@ export class DiscordBotClient {
         case 'btn_start':
           commandName = 'start';
           break;
-        case 'btn_hold':
-          commandName = 'hold';
-          args = [];
-          break;
         case 'btn_fixac':
           commandName = 'fixac';
           break;
@@ -575,6 +670,7 @@ export class DiscordBotClient {
       const command = this.commands.get(commandName.toLowerCase());
       if (!command) {
         this.log(`Command for button "${customId}" not found`, 'warn');
+        await this.sendErrorMessage({ content: `❌ button command "${customId}" not found` }).catch(() => {});
         return;
       }
 
@@ -589,7 +685,16 @@ export class DiscordBotClient {
         channelId: interaction.channelId,
         reply: async (replyText: string) => {
           try {
-            await this.updateDashboard({ content: replyText });
+            if (
+              replyText.startsWith('❌') ||
+              replyText.toLowerCase().includes('not found') ||
+              replyText.toLowerCase().startsWith('error:') ||
+              replyText.toLowerCase().startsWith('error ')
+            ) {
+              await this.sendErrorMessage({ content: replyText });
+            } else {
+              await this.updateDashboard({ content: replyText });
+            }
           } catch (e: any) {
             this.log(`Failed to reply to button action: ${e.message}`, 'warn');
           }
@@ -609,6 +714,41 @@ export class DiscordBotClient {
       } catch (err: any) {
         ConsoleLogger.error(err, `button ${commandName}`);
         this.log(`Error executing button ${commandName}: ${err.message}`, 'error', err);
+        try {
+          await this.sendErrorMessage({ content: `❌ error executing ${commandName}: ${err.message}` });
+        } catch {}
+      }
+    });
+
+    this.client.on(Events.MessageReactionAdd, async (reaction, user) => {
+      // Ignore bot reactions
+      if (user.bot) return;
+
+      try {
+        if (reaction.partial) {
+          await reaction.fetch().catch(() => {});
+        }
+        if (reaction.message.partial) {
+          await reaction.message.fetch().catch(() => {});
+        }
+
+        const msg = reaction.message;
+        const msgId = msg.id;
+        const isDismissable = this.isDismissableErrorMessage(msgId);
+        const isBotErrorMsg =
+          msg.author?.id === this.client?.user?.id &&
+          (msg.content?.includes('❌') ||
+            msg.content?.toLowerCase().includes('not found') ||
+            msg.content?.includes('react with any emoji') ||
+            msg.content?.toLowerCase().includes('error:'));
+
+        if (isDismissable || isBotErrorMsg) {
+          this.removeDismissableErrorMessage(msgId);
+          this.log(`🗑️ User ${user.tag} reacted to error message (${msgId}). Removing message...`, 'info');
+          await msg.delete().catch(() => {});
+        }
+      } catch (err: any) {
+        this.log(`Failed to delete error message on reaction: ${err.message}`, 'warn');
       }
     });
 

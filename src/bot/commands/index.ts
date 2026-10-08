@@ -80,67 +80,96 @@ export const tapCommand: CommandDefinition = {
 
 export const holdCommand: CommandDefinition = {
   name: 'hold',
-  description: 'Performs a long press / hold at coordinates or random range for a specified duration.',
-  usage: 'hold <x> <y> [durationMs/seconds]  OR  hold <xMin-xMax> <yMin-yMax> [durationMs/seconds]',
+  description: 'Holds coordinates or range on device for a duration specified in minutes.',
+  usage: 'hold <xrange> <yrange> <time-in-minutes> (e.g. hold 123-345 56-738 5)',
   aliases: ['longpress', 'press', 'input-hold'],
 
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
     const { botManager } = await import('../botManager');
     const adb = botManager.getAdbController();
 
-    let argX = ctx.args[0];
-    let argY = ctx.args[1];
-    let durArg = ctx.args[2];
-
-    if (!argX || !argY) {
-      // Default to screen center (540, 1170) when triggered by Discord button or without arguments
-      argX = '540';
-      argY = '1170';
-      durArg = durArg || '1000';
+    if (ctx.args.length < 3) {
+      const msg = 'usage: `hold <xrange> <yrange> <time-in-minutes>` (e.g. `hold 123-345 56-738 5`)';
+      if (ctx.reply) await ctx.reply(msg);
+      return { success: false, message: msg };
     }
-    let durationMs = 1000;
 
-    if (durArg) {
-      const clean = durArg.toLowerCase().trim();
-      if (clean.endsWith('ms')) {
-        durationMs = parseInt(clean, 10);
-      } else if (clean.endsWith('s')) {
-        durationMs = Math.round(parseFloat(clean) * 1000);
-      } else {
-        const v = parseFloat(clean);
-        if (!isNaN(v)) {
-          durationMs = v > 0 && v <= 30 && clean.includes('.') ? Math.round(v * 1000) : Math.round(v);
-        }
+    const argX = ctx.args[0].trim();
+    const argY = ctx.args[1].trim();
+    const durArg = ctx.args[2].trim();
+
+    const cleanDur = durArg.toLowerCase();
+    let durationMinutes = 1;
+
+    if (cleanDur.endsWith('ms')) {
+      durationMinutes = parseFloat(cleanDur) / 60000;
+    } else if (cleanDur.endsWith('s') && !cleanDur.endsWith('mins')) {
+      durationMinutes = parseFloat(cleanDur) / 60;
+    } else {
+      const parsed = parseFloat(cleanDur.replace(/(m|min|mins)$/i, ''));
+      if (isNaN(parsed) || parsed <= 0) {
+        const msg = 'invalid time-in-minutes (e.g. `hold 123-345 56-738 5`)';
+        if (ctx.reply) await ctx.reply(msg);
+        return { success: false, message: msg };
       }
+      durationMinutes = parsed;
     }
 
-    durationMs = Math.max(50, isNaN(durationMs) ? 1000 : durationMs);
+    const durationMs = Math.max(100, Math.round(durationMinutes * 60 * 1000));
+
+    let minX: number;
+    let maxX: number;
+    let minY: number;
+    let maxY: number;
+    let isRange = false;
+
+    if (argX.includes('-')) {
+      isRange = true;
+      const parts = argX.split('-').map(Number);
+      minX = parts[0];
+      maxX = parts[1];
+    } else {
+      const x = Number(argX);
+      minX = x;
+      maxX = x;
+    }
+
+    if (argY.includes('-')) {
+      isRange = true;
+      const parts = argY.split('-').map(Number);
+      minY = parts[0];
+      maxY = parts[1];
+    } else {
+      const y = Number(argY);
+      minY = y;
+      maxY = y;
+    }
+
+    if (isNaN(minX) || isNaN(maxX) || isNaN(minY) || isNaN(maxY)) {
+      const msg = 'invalid coordinates or range (e.g. `hold 123-345 56-738 5`)';
+      if (ctx.reply) await ctx.reply(msg);
+      return { success: false, message: msg };
+    }
+
+    const targetDesc = isRange ? `${argX} ${argY}` : `(${minX}, ${minY})`;
+    const minDesc = durationMinutes >= 1 ? `${durationMinutes} minute(s)` : `${Math.round(durationMs / 1000)}s`;
+
+    const startMsg = `-# ⏱️ holding ${targetDesc} for ${minDesc}...`;
+    ctx.log(startMsg, 'info');
+    if (ctx.reply) await ctx.reply(startMsg);
 
     let result;
-    if (argX.includes('-') || argY.includes('-')) {
-      const [minX, maxX] = argX.split('-').map(Number);
-      const [minY, maxY] = argY.split('-').map(Number);
-      if (isNaN(minX) || isNaN(maxX) || isNaN(minY) || isNaN(maxY)) {
-        const msg = 'invalid range';
-        if (ctx.reply) await ctx.reply(msg);
-        return { success: false, message: msg };
-      }
+    if (isRange) {
       result = await adb.holdRandomRange(minX, maxX, minY, maxY, durationMs);
     } else {
-      const x = parseInt(argX, 10);
-      const y = parseInt(argY, 10);
-      if (isNaN(x) || isNaN(y)) {
-        const msg = 'invalid coordinates';
-        if (ctx.reply) await ctx.reply(msg);
-        return { success: false, message: msg };
-      }
-      result = await adb.hold(x, y, durationMs);
+      result = await adb.hold(minX, minY, durationMs);
     }
 
-    const output = `held (${result.x}, ${result.y}) for ${result.durationMs || durationMs}ms`;
-    ctx.log(output, 'info');
-    if (ctx.reply) await ctx.reply(output);
-    return { success: true, message: output, data: result };
+    const finishMsg = `-# ✅ held (${result.x}, ${result.y}) for ${minDesc}`;
+    ctx.log(finishMsg, 'info');
+    if (ctx.reply) await ctx.reply(finishMsg);
+
+    return { success: true, message: finishMsg, data: result };
   }
 };
 
@@ -1371,11 +1400,9 @@ const COMMAND_MANUALS: Record<string, string> = {
   ].join('\n'),
 
   hold: [
-    '**hold** (or `press`, `longpress`) — Long-press / hold coordinates on screen via ADB',
-    'usage:',
-    '• `hold <x> <y> [duration]` — holds exact point (e.g. `hold 540 1200 2s` or `hold 540 1200 1500`)',
-    '• `hold <minX>-<maxX> <minY>-<maxY> [duration]` — holds random point in box (e.g. `hold 200-400 800-900 2000`)',
-    '• default duration is 1000ms (1 second) if omitted'
+    '**hold** (or `press`, `longpress`) — Hold coordinates on screen for specified minutes',
+    'usage: `hold <xrange> <yrange> <time-in-minutes>`',
+    'example: `hold 123-345 56-738 5` (holds random point in range for 5 minutes)'
   ].join('\n'),
 
   screenshot: [

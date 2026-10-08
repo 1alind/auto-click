@@ -591,7 +591,7 @@ export class ScreenRuleManager {
     const { botManager } = await import('./botManager');
     const discord = botManager.getDiscordBot();
     if (discord.isConnected()) {
-      await discord.updateDashboard({
+      await discord.sendErrorMessage({
         content: msg,
         fileBuffer: screenshot,
         fileName: `screen_${Date.now()}.png`

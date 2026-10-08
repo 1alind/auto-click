@@ -412,23 +412,26 @@ export class MacroManager {
     const lines = normalized.split('\n').map((l) => l.trim()).filter(Boolean);
     const steps: MacroAction[] = [];
 
-    const parseDurationMs = (raw?: string, defaultMs: number = 1000): number => {
+    const parseDurationMs = (raw?: string, defaultMs: number = 1000, isMinutesDefault: boolean = false): number => {
       if (!raw) return defaultMs;
       const clean = raw.toLowerCase().replace(/^for\s+/, '').trim();
       if (clean.endsWith('ms')) {
         const v = parseInt(clean, 10);
         return isNaN(v) ? defaultMs : v;
       }
-      if (clean.endsWith('s')) {
+      if (clean.endsWith('s') && !clean.endsWith('mins') && !clean.endsWith('min')) {
         const v = parseFloat(clean);
         return isNaN(v) ? defaultMs : Math.round(v * 1000);
       }
-      const v = parseFloat(clean);
-      if (isNaN(v)) return defaultMs;
-      if (v > 0 && v <= 30 && (clean.includes('.') || !Number.isInteger(v))) {
-        return Math.round(v * 1000);
+      const num = parseFloat(clean.replace(/(m|min|mins)$/i, ''));
+      if (isNaN(num)) return defaultMs;
+      if (isMinutesDefault || clean.endsWith('m') || clean.endsWith('min') || clean.endsWith('mins')) {
+        return Math.round(num * 60 * 1000);
       }
-      return Math.round(v);
+      if (num > 0 && num <= 30 && (clean.includes('.') || !Number.isInteger(num))) {
+        return Math.round(num * 1000);
+      }
+      return Math.round(num);
     };
 
     for (const rawLine of lines) {
@@ -449,14 +452,14 @@ export class MacroManager {
         const arg1 = isBareCoords ? (parts[0] || '') : (parts[1] || '');
         const arg2 = isBareCoords ? (parts[1] || '') : (parts[2] || '');
 
-        let holdDuration: number | undefined = isHoldAction ? 1000 : undefined;
+        let holdDuration: number | undefined = isHoldAction ? 60000 : undefined;
         const holdIdx = parts.findIndex((p) => p.toLowerCase() === 'hold' || p.toLowerCase() === 'for');
         if (holdIdx !== -1 && parts[holdIdx + 1]) {
-          holdDuration = parseDurationMs(parts[holdIdx + 1], 1000);
+          holdDuration = parseDurationMs(parts[holdIdx + 1], 60000, true);
         } else {
           const potDur = isBareCoords ? parts[2] : parts[3];
           if (potDur && !potDur.includes('-')) {
-            const v = parseDurationMs(potDur, 0);
+            const v = parseDurationMs(potDur, 0, isHoldAction);
             if (v > 0) holdDuration = v;
           }
         }
@@ -1456,10 +1459,9 @@ export class MacroManager {
               const errorMsg = `❌ Template image "${targetName}" not found on disk! Stopping macro ${macro.name}.`;
               ctx.log(errorMsg, 'error');
               try {
-                const webhook = botManager.getWebhookService();
-                if (webhook.isConfigured()) {
+                if (discord.isConnected()) {
                   const croppedBuffer = await captureCleanErrorScreenshot(adb, region, rawScreen);
-                  await webhook.send({
+                  await discord.sendErrorMessage({
                     content: errorMsg,
                     fileBuffer: croppedBuffer,
                     fileName: `missing_file_${targetName}_step${stepNumber}.png`

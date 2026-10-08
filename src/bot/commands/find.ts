@@ -145,7 +145,7 @@ export const findCommand: CommandDefinition = {
         try {
           if (discord.isConnected()) {
             const croppedBuffer = await TemplateMatcher.cropRawToPng(rawScreen1, searchRegion);
-            await discord.updateDashboard({
+            await discord.sendErrorMessage({
               content: errorMsg,
               fileBuffer: croppedBuffer,
               fileName: `find_not_found_pfp.png`
