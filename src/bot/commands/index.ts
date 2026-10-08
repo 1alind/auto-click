@@ -3,8 +3,8 @@ import { StoragePaths } from '../storagePaths';
 
 export const tapCommand: CommandDefinition = {
   name: 'tap',
-  description: 'Taps exact coordinate or random range on Android device.',
-  usage: 'tap <x> <y>  OR  tap <xMin-xMax> <yMin-yMax>',
+  description: 'Taps exact coordinate or random range on Android device (with optional hold duration).',
+  usage: 'tap <x> <y> [durationMs/seconds]  OR  tap <xMin-xMax> <yMin-yMax> [durationMs/seconds]',
   aliases: ['click', 'input-tap'],
 
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
@@ -12,13 +12,33 @@ export const tapCommand: CommandDefinition = {
     const adb = botManager.getAdbController();
 
     if (ctx.args.length < 2) {
-      const msg = 'usage: tap <x> <y>';
+      const msg = 'usage: tap <x> <y> [duration]';
       if (ctx.reply) await ctx.reply(msg);
       return { success: false, message: msg };
     }
 
     const argX = ctx.args[0];
     const argY = ctx.args[1];
+    const durArg = ctx.args[2];
+    let holdDurationMs: number | undefined;
+
+    if (durArg) {
+      const clean = durArg.toLowerCase().trim();
+      if (clean.endsWith('ms')) {
+        holdDurationMs = parseInt(clean, 10);
+      } else if (clean.endsWith('s')) {
+        holdDurationMs = Math.round(parseFloat(clean) * 1000);
+      } else {
+        const v = parseFloat(clean);
+        if (!isNaN(v)) {
+          holdDurationMs = v > 0 && v <= 30 && clean.includes('.') ? Math.round(v * 1000) : Math.round(v);
+        }
+      }
+    }
+
+    if (holdDurationMs !== undefined) {
+      holdDurationMs = Math.max(50, holdDurationMs);
+    }
 
     let result;
     if (argX.includes('-') || argY.includes('-')) {
@@ -29,7 +49,11 @@ export const tapCommand: CommandDefinition = {
         if (ctx.reply) await ctx.reply(msg);
         return { success: false, message: msg };
       }
-      result = await adb.tapRandomRange(minX, maxX, minY, maxY);
+      if (holdDurationMs && holdDurationMs > 0) {
+        result = await adb.holdRandomRange(minX, maxX, minY, maxY, holdDurationMs);
+      } else {
+        result = await adb.tapRandomRange(minX, maxX, minY, maxY);
+      }
     } else {
       const x = parseInt(argX, 10);
       const y = parseInt(argY, 10);
@@ -38,10 +62,81 @@ export const tapCommand: CommandDefinition = {
         if (ctx.reply) await ctx.reply(msg);
         return { success: false, message: msg };
       }
-      result = await adb.tap(x, y);
+      if (holdDurationMs && holdDurationMs > 0) {
+        result = await adb.hold(x, y, holdDurationMs);
+      } else {
+        result = await adb.tap(x, y);
+      }
     }
 
-    const output = `tapped (${result.x}, ${result.y})`;
+    const output = (holdDurationMs && holdDurationMs > 0)
+      ? `held (${result.x}, ${result.y}) for ${result.durationMs || holdDurationMs}ms`
+      : `tapped (${result.x}, ${result.y})`;
+    ctx.log(output, 'info');
+    if (ctx.reply) await ctx.reply(output);
+    return { success: true, message: output, data: result };
+  }
+};
+
+export const holdCommand: CommandDefinition = {
+  name: 'hold',
+  description: 'Performs a long press / hold at coordinates or random range for a specified duration.',
+  usage: 'hold <x> <y> [durationMs/seconds]  OR  hold <xMin-xMax> <yMin-yMax> [durationMs/seconds]',
+  aliases: ['longpress', 'press', 'input-hold'],
+
+  execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const { botManager } = await import('../botManager');
+    const adb = botManager.getAdbController();
+
+    if (ctx.args.length < 2) {
+      const msg = 'usage: hold <x> <y> [durationMs/seconds] (e.g. hold 500 1000 2s)';
+      if (ctx.reply) await ctx.reply(msg);
+      return { success: false, message: msg };
+    }
+
+    const argX = ctx.args[0];
+    const argY = ctx.args[1];
+    const durArg = ctx.args[2];
+    let durationMs = 1000;
+
+    if (durArg) {
+      const clean = durArg.toLowerCase().trim();
+      if (clean.endsWith('ms')) {
+        durationMs = parseInt(clean, 10);
+      } else if (clean.endsWith('s')) {
+        durationMs = Math.round(parseFloat(clean) * 1000);
+      } else {
+        const v = parseFloat(clean);
+        if (!isNaN(v)) {
+          durationMs = v > 0 && v <= 30 && clean.includes('.') ? Math.round(v * 1000) : Math.round(v);
+        }
+      }
+    }
+
+    durationMs = Math.max(50, isNaN(durationMs) ? 1000 : durationMs);
+
+    let result;
+    if (argX.includes('-') || argY.includes('-')) {
+      const [minX, maxX] = argX.split('-').map(Number);
+      const [minY, maxY] = argY.split('-').map(Number);
+      if (isNaN(minX) || isNaN(maxX) || isNaN(minY) || isNaN(maxY)) {
+        const msg = 'invalid range';
+        if (ctx.reply) await ctx.reply(msg);
+        return { success: false, message: msg };
+      }
+      result = await adb.holdRandomRange(minX, maxX, minY, maxY, durationMs);
+    } else {
+      const x = parseInt(argX, 10);
+      const y = parseInt(argY, 10);
+      if (isNaN(x) || isNaN(y)) {
+        const msg = 'invalid coordinates';
+        if (ctx.reply) await ctx.reply(msg);
+        return { success: false, message: msg };
+      }
+      result = await adb.hold(x, y, durationMs);
+    }
+
+    const output = `held (${result.x}, ${result.y}) for ${result.durationMs || durationMs}ms`;
     ctx.log(output, 'info');
     if (ctx.reply) await ctx.reply(output);
     return { success: true, message: output, data: result };
@@ -1249,9 +1344,12 @@ const COMMAND_MANUALS: Record<string, string> = {
     '• `macro list` — lists all saved custom commands',
     'step actions you can use:',
     '• `tap <x> <y>` — tap exact point (e.g. `tap 500 1000`)',
+    '• `hold <x> <y> [duration]` — hold / long press point (e.g. `hold 500 1000 2s`)',
     '• `tap <minX>-<maxX> <minY>-<maxY>` — random tap in box (e.g. `tap 227-766 2326-2387`)',
+    '• `hold <minX>-<maxX> <minY>-<maxY> [duration]` — hold random point in box (e.g. `hold 200-400 500-600 1500`)',
     '• `wait <ms or Ns>` — wait time (e.g. `wait 2000` or `wait 3s`)',
     '• `search <img>` — find image from `autoclick/` on screen & tap it (e.g. `search btn.jpg`)',
+    '• `search <img> hold <duration>` — find image on screen & hold it (e.g. `search btn.jpg hold 2000`)',
     '• `search <img> <minX>-<maxX> <minY>-<maxY>` — find image inside box & tap (e.g. `search pfp.jpg 79-220 523-1721`)',
     '• `crop <size>` — screenshot + center crop `<size>x<size>` + send to webhook (e.g. `crop 150`)',
     '• `loop` — repeats the macro from step 1 in an infinite loop until you send `stop`',
@@ -1266,10 +1364,18 @@ const COMMAND_MANUALS: Record<string, string> = {
   ].join('\n'),
 
   tap: [
-    '**tap** — Tap coordinates on screen via ADB',
+    '**tap** — Tap coordinates on screen via ADB (with optional hold duration)',
     'usage:',
-    '• `tap <x> <y>` — taps exact coordinate (e.g. `tap 540 1200`)',
-    '• `tap <minX>-<maxX> <minY>-<maxY>` — taps random point inside box (e.g. `tap 200-400 800-900`)'
+    '• `tap <x> <y> [holdMs]` — taps coordinate (e.g. `tap 540 1200` or `tap 540 1200 2000` to hold)',
+    '• `tap <minX>-<maxX> <minY>-<maxY> [holdMs]` — taps random point inside box'
+  ].join('\n'),
+
+  hold: [
+    '**hold** (or `press`, `longpress`) — Long-press / hold coordinates on screen via ADB',
+    'usage:',
+    '• `hold <x> <y> [duration]` — holds exact point (e.g. `hold 540 1200 2s` or `hold 540 1200 1500`)',
+    '• `hold <minX>-<maxX> <minY>-<maxY> [duration]` — holds random point in box (e.g. `hold 200-400 800-900 2000`)',
+    '• default duration is 1000ms (1 second) if omitted'
   ].join('\n'),
 
   screenshot: [
@@ -1410,6 +1516,7 @@ export const helpCommand: CommandDefinition = {
       '• `test` — benchmark time taken to capture, crop & compare an image (`help test`)',
       '• `macro` — create & manage custom multi-step commands (`help macro`)',
       '• `tap` — tap exact `X Y` or random `minX-maxX minY-maxY` (`help tap`)',
+      '• `hold` — hold / long-press coordinates or random box for duration (`help hold`)',
       '• `screenshot` — capture full screen, crop `X Y` area, or save to sdcard (`help screenshot`)',
       '• `images` — send all saved images & names from `/sdcard/autoclick/` (`help images`)',
       '• `connect` / `pair` / `devices` — wireless ADB connection tools (`help connect`)',

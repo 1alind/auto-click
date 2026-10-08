@@ -12,6 +12,7 @@ import { aiCommand } from './commands/ai';
 import { moveCommand } from './commands/move';
 import {
   tapCommand,
+  holdCommand,
   screenshotCommand,
   devicesCommand,
   statusCommand,
@@ -108,6 +109,7 @@ export class BotManager {
     this.discord.registerCommand(textsCommand);
     this.discord.registerCommand(subCommand);
     this.discord.registerCommand(tapCommand);
+    this.discord.registerCommand(holdCommand);
     this.discord.registerCommand(screenshotCommand);
     this.discord.registerCommand(devicesCommand);
     this.discord.registerCommand(statusCommand);

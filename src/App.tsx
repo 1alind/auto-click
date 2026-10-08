@@ -50,6 +50,7 @@ export default function App() {
   // Drag / Swipe / Box state
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [dragCurrent, setDragCurrent] = useState<{ x: number; y: number } | null>(null);
+  const [pointerDownTime, setPointerDownTime] = useState<number>(0);
   const [selectedBox, setSelectedBox] = useState<{
     minX: number;
     maxX: number;
@@ -66,18 +67,20 @@ export default function App() {
   const [rulesList, setRulesList] = useState<any[]>([]);
   const [latestPending, setLatestPending] = useState<any | null>(null);
   const [ruleInputId, setRuleInputId] = useState<string>('');
-  const [ruleActionType, setRuleActionType] = useState<'tap' | 'back'>('tap');
+  const [ruleActionType, setRuleActionType] = useState<'tap' | 'hold' | 'back'>('tap');
   const [ruleTapX, setRuleTapX] = useState<string>('500');
   const [ruleTapY, setRuleTapY] = useState<string>('1000');
+  const [ruleHoldMs, setRuleHoldMs] = useState<string>('1000');
   const [rulesLoading, setRulesLoading] = useState<boolean>(false);
 
   // Manual rule creation state
   const [showManualForm, setShowManualForm] = useState<boolean>(false);
   const [manualId, setManualId] = useState<string>('');
   const [manualKeywords, setManualKeywords] = useState<string>('');
-  const [manualActionType, setManualActionType] = useState<'tap' | 'back'>('tap');
+  const [manualActionType, setManualActionType] = useState<'tap' | 'hold' | 'back'>('tap');
   const [manualTapX, setManualTapX] = useState<string>('500');
   const [manualTapY, setManualTapY] = useState<string>('1000');
+  const [manualHoldMs, setManualHoldMs] = useState<string>('1000');
   const [isScanningScreen, setIsScanningScreen] = useState<boolean>(false);
 
   const fetchRules = useCallback(async () => {
@@ -107,6 +110,8 @@ export default function App() {
     const action =
       ruleActionType === 'back'
         ? { type: 'back' }
+        : ruleActionType === 'hold'
+        ? { type: 'hold', x: Number(ruleTapX) || 500, y: Number(ruleTapY) || 1000, holdMs: Number(ruleHoldMs) || 1000 }
         : { type: 'tap', x: Number(ruleTapX) || 500, y: Number(ruleTapY) || 1000 };
 
     try {
@@ -205,6 +210,8 @@ export default function App() {
     const action =
       manualActionType === 'back'
         ? { type: 'back' }
+        : manualActionType === 'hold'
+        ? { type: 'hold', x: Number(manualTapX) || 500, y: Number(manualTapY) || 1000, holdMs: Number(manualHoldMs) || 1000 }
         : { type: 'tap', x: Number(manualTapX) || 500, y: Number(manualTapY) || 1000 };
 
     try {
@@ -322,6 +329,7 @@ export default function App() {
     e.currentTarget.setPointerCapture(e.pointerId);
     setDragStart(pt);
     setDragCurrent(pt);
+    setPointerDownTime(Date.now());
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -337,8 +345,10 @@ export default function App() {
     if (!dragStart) return;
     const endPt = clientToPhoneCoords(e.clientX, e.clientY) || dragCurrent || dragStart;
     const startPt = dragStart;
+    const pressDur = pointerDownTime ? Date.now() - pointerDownTime : 0;
     setDragStart(null);
     setDragCurrent(null);
+    setPointerDownTime(0);
 
     const dx = Math.abs(endPt.x - startPt.x);
     const dy = Math.abs(endPt.y - startPt.y);
@@ -372,6 +382,16 @@ export default function App() {
           y2: endPt.y,
           durationMs: 300
         })
+      });
+      setTimeout(() => fetchFrame(true), 350);
+    } else if (pressDur >= 400) {
+      setHoverCoords(endPt);
+      setLastTapMarker({ x: endPt.x, y: endPt.y, ts: Date.now() });
+      showToast(`Hold (${endPt.x}, ${endPt.y}) for ${pressDur}ms`);
+      await fetch('/api/live/hold', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x: endPt.x, y: endPt.y, durationMs: pressDur })
       });
       setTimeout(() => fetchFrame(true), 350);
     } else {
@@ -794,6 +814,17 @@ export default function App() {
                       </button>
                       <button
                         type="button"
+                        onClick={() => setRuleActionType('hold')}
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                          ruleActionType === 'hold'
+                            ? 'bg-amber-600 text-white'
+                            : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Hold (X, Y)
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => setRuleActionType('back')}
                         className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
                           ruleActionType === 'back'
@@ -805,7 +836,7 @@ export default function App() {
                       </button>
                     </div>
 
-                    {ruleActionType === 'tap' && (
+                    {(ruleActionType === 'tap' || ruleActionType === 'hold') && (
                       <div className="flex items-center gap-2">
                         <div className="flex items-center gap-1">
                           <span className="text-slate-400 text-[10px]">X:</span>
@@ -825,6 +856,17 @@ export default function App() {
                             className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-center font-mono text-[11px]"
                           />
                         </div>
+                        {ruleActionType === 'hold' && (
+                          <div className="flex items-center gap-1">
+                            <span className="text-slate-400 text-[10px]">Hold(ms):</span>
+                            <input
+                              type="number"
+                              value={ruleHoldMs}
+                              onChange={(e) => setRuleHoldMs(e.target.value)}
+                              className="w-20 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-center font-mono text-[11px]"
+                            />
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -901,6 +943,17 @@ export default function App() {
                       </button>
                       <button
                         type="button"
+                        onClick={() => setManualActionType('hold')}
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                          manualActionType === 'hold'
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Hold (X, Y)
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => setManualActionType('back')}
                         className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
                           manualActionType === 'back'
@@ -912,7 +965,7 @@ export default function App() {
                       </button>
                     </div>
 
-                    {manualActionType === 'tap' && (
+                    {(manualActionType === 'tap' || manualActionType === 'hold') && (
                       <div className="flex items-center gap-2">
                         <div className="flex items-center gap-1">
                           <span className="text-slate-400 text-[10px]">X:</span>
@@ -932,6 +985,17 @@ export default function App() {
                             className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-center font-mono text-[11px]"
                           />
                         </div>
+                        {manualActionType === 'hold' && (
+                          <div className="flex items-center gap-1">
+                            <span className="text-slate-400 text-[10px]">Hold(ms):</span>
+                            <input
+                              type="number"
+                              value={manualHoldMs}
+                              onChange={(e) => setManualHoldMs(e.target.value)}
+                              className="w-20 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-center font-mono text-[11px]"
+                            />
+                          </div>
+                        )}
                       </div>
                     )}
 

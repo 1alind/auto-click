@@ -23,6 +23,7 @@ export interface TapResult {
   success: boolean;
   output?: string;
   isSimulated?: boolean;
+  durationMs?: number;
 }
 
 export class AdbController {
@@ -540,6 +541,55 @@ export class AdbController {
     const randomY = Math.floor(lowY + Math.random() * (highY - lowY + 1));
 
     const result = await this.tap(randomX, randomY);
+    return {
+      ...result,
+      minX: lowX,
+      maxX: highX,
+      minY: lowY,
+      maxY: highY
+    };
+  }
+
+  /**
+   * Performs a long press / hold at coordinates (x, y) for durationMs.
+   * On Android, swiping from (x, y) to (x, y) with duration is the standard ADB hold command.
+   */
+  public async hold(
+    x: number,
+    y: number,
+    durationMs: number = 1000
+  ): Promise<TapResult> {
+    const rx = Math.round(x);
+    const ry = Math.round(y);
+    const dur = Math.max(100, Math.round(durationMs));
+    await this.swipe(rx, ry, rx, ry, dur);
+    return {
+      x: rx,
+      y: ry,
+      command: `swipe ${rx} ${ry} ${rx} ${ry} ${dur}`,
+      success: true,
+      output: `hold (${rx}, ${ry}) for ${dur}ms`,
+      durationMs: dur
+    };
+  }
+
+  /**
+   * Performs a long press / hold on a random coordinate within a range for durationMs.
+   */
+  public async holdRandomRange(
+    minX: number,
+    maxX: number,
+    minY: number,
+    maxY: number,
+    durationMs: number = 1000
+  ): Promise<TapResult> {
+    const lowX = Math.min(minX, maxX);
+    const highX = Math.max(minX, maxX);
+    const lowY = Math.min(minY, maxY);
+    const highY = Math.max(minY, maxY);
+    const randomX = Math.floor(lowX + Math.random() * (highX - lowX + 1));
+    const randomY = Math.floor(lowY + Math.random() * (highY - lowY + 1));
+    const result = await this.hold(randomX, randomY, durationMs);
     return {
       ...result,
       minX: lowX,

@@ -256,7 +256,7 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
     let quality = 'h264';
     let screenW = 1080, screenH = 2400;
     let inFlight = false;
-    let dragStart = null, dragCur = null, selectedBox = null;
+    let dragStart = null, dragCur = null, selectedBox = null, pointerDownTime = 0;
     let jmuxer = null;
     let h264Abort = null;
 
@@ -541,6 +541,7 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
       viewport.setPointerCapture(e.pointerId);
       dragStart = pt;
       dragCur = pt;
+      pointerDownTime = Date.now();
     });
 
     viewport.addEventListener('pointermove', (e) => {
@@ -564,7 +565,8 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
       if (!dragStart) return;
       const endPt = toPhone(e.clientX, e.clientY) || dragCur || dragStart;
       const sPt = dragStart;
-      dragStart = null; dragCur = null;
+      const pressDur = pointerDownTime ? Date.now() - pointerDownTime : 0;
+      dragStart = null; dragCur = null; pointerDownTime = 0;
       const dx = Math.abs(endPt.x - sPt.x), dy = Math.abs(endPt.y - sPt.y);
 
       if (mode === 'box') {
@@ -589,6 +591,18 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ x1: sPt.x, y1: sPt.y, x2: endPt.x, y2: endPt.y, durationMs: 300 })
+        });
+        if (quality !== 'h264') setTimeout(() => fetchFrame(true), 250);
+      } else if (pressDur >= 400) {
+        tapMarker.style.display = 'block';
+        tapMarker.style.left = ((endPt.x / screenW) * 100) + '%';
+        tapMarker.style.top = ((endPt.y / screenH) * 100) + '%';
+        setTimeout(() => { tapMarker.style.display = 'none'; }, 1200);
+        toast('Hold (' + endPt.x + ', ' + endPt.y + ') for ' + pressDur + 'ms');
+        await fetch('/api/live/hold', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ x: endPt.x, y: endPt.y, durationMs: pressDur })
         });
         if (quality !== 'h264') setTimeout(() => fetchFrame(true), 250);
       } else {
@@ -1044,7 +1058,26 @@ export class LiveController {
         const { botManager } = await import('./botManager');
         const x = Math.round(Number(req.body.x) || 0);
         const y = Math.round(Number(req.body.y) || 0);
-        const result = await botManager.getAdbController().tap(x, y);
+        const durationMs = Math.round(Number(req.body.durationMs || req.body.holdMs) || 0);
+        let result;
+        if (durationMs >= 100) {
+          result = await botManager.getAdbController().hold(x, y, durationMs);
+        } else {
+          result = await botManager.getAdbController().tap(x, y);
+        }
+        res.json({ success: true, result });
+      } catch (err: any) {
+        res.status(500).json({ success: false, message: err.message });
+      }
+    });
+
+    app.post('/api/live/hold', async (req, res) => {
+      try {
+        const { botManager } = await import('./botManager');
+        const x = Math.round(Number(req.body.x) || 0);
+        const y = Math.round(Number(req.body.y) || 0);
+        const durationMs = Math.max(50, Math.round(Number(req.body.durationMs || req.body.holdMs) || 1000));
+        const result = await botManager.getAdbController().hold(x, y, durationMs);
         res.json({ success: true, result });
       } catch (err: any) {
         res.status(500).json({ success: false, message: err.message });

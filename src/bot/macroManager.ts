@@ -11,6 +11,8 @@ import { createControlButtonsJson } from './discordButtons';
 export type MacroActionType =
   | 'tap'
   | 'tap_range'
+  | 'hold'
+  | 'hold_range'
   | 'wait'
   | 'screenshot'
   | 'locate_and_tap'
@@ -22,13 +24,14 @@ export type MacroActionType =
 
 export interface MacroAction {
   type: MacroActionType;
-  // tap / tap_range
+  // tap / tap_range / hold / hold_range
   x?: number;
   y?: number;
   minX?: number;
   maxX?: number;
   minY?: number;
   maxY?: number;
+  holdMs?: number;
   // wait
   ms?: number;
   // locate_and_tap
@@ -380,10 +383,29 @@ export class MacroManager {
       .replace(/\r\n/g, '\n')
       .replace(/;/g, '\n')
       .replace(/(?:^|\s+)(?:step\s+)?\d+[\.\)\:\-]\s*/gi, '\n')
-      .replace(/\s+(?=(?:tap|click|wait|sleep|delay|locate|search|find|match|crop|crop_webhook|webhook|screenshot|snap|swipe|scroll|text|type|key|keyevent|loop|repeat)\b)/gi, '\n');
+      .replace(/\s+(?=(?:tap|click|hold|press|longpress|wait|sleep|delay|locate|search|find|match|crop|crop_webhook|webhook|screenshot|snap|swipe|scroll|text|type|key|keyevent|loop|repeat)\b)/gi, '\n');
 
     const lines = normalized.split('\n').map((l) => l.trim()).filter(Boolean);
     const steps: MacroAction[] = [];
+
+    const parseDurationMs = (raw?: string, defaultMs: number = 1000): number => {
+      if (!raw) return defaultMs;
+      const clean = raw.toLowerCase().replace(/^for\s+/, '').trim();
+      if (clean.endsWith('ms')) {
+        const v = parseInt(clean, 10);
+        return isNaN(v) ? defaultMs : v;
+      }
+      if (clean.endsWith('s')) {
+        const v = parseFloat(clean);
+        return isNaN(v) ? defaultMs : Math.round(v * 1000);
+      }
+      const v = parseFloat(clean);
+      if (isNaN(v)) return defaultMs;
+      if (v > 0 && v <= 30 && (clean.includes('.') || !Number.isInteger(v))) {
+        return Math.round(v * 1000);
+      }
+      return Math.round(v);
+    };
 
     for (const rawLine of lines) {
       const line = rawLine.replace(/^(?:step\s+)?\d+[\.\)\:\-]\s*/i, '').trim();
@@ -391,32 +413,78 @@ export class MacroManager {
 
       const parts = line.split(/\s+/);
       const action = parts[0].toLowerCase();
+      const isHoldAction = action === 'hold' || action === 'press' || action === 'longpress';
 
-      if (action === 'tap' || action === 'click' || (/^\d+-\d+$/.test(parts[0] || '') && /^\d+-\d+$/.test(parts[1] || ''))) {
-        const isBareCoords = action !== 'tap' && action !== 'click';
+      if (
+        action === 'tap' ||
+        action === 'click' ||
+        isHoldAction ||
+        (/^\d+-\d+$/.test(parts[0] || '') && /^\d+-\d+$/.test(parts[1] || ''))
+      ) {
+        const isBareCoords = !isHoldAction && action !== 'tap' && action !== 'click';
         const arg1 = isBareCoords ? (parts[0] || '') : (parts[1] || '');
         const arg2 = isBareCoords ? (parts[1] || '') : (parts[2] || '');
+
+        let holdDuration: number | undefined = isHoldAction ? 1000 : undefined;
+        const holdIdx = parts.findIndex((p) => p.toLowerCase() === 'hold' || p.toLowerCase() === 'for');
+        if (holdIdx !== -1 && parts[holdIdx + 1]) {
+          holdDuration = parseDurationMs(parts[holdIdx + 1], 1000);
+        } else {
+          const potDur = isBareCoords ? parts[2] : parts[3];
+          if (potDur && !potDur.includes('-')) {
+            const v = parseDurationMs(potDur, 0);
+            if (v > 0) holdDuration = v;
+          }
+        }
+
+        if (holdDuration !== undefined) {
+          holdDuration = Math.max(50, holdDuration);
+        }
 
         if (arg1.includes('-') || arg2.includes('-')) {
           const [minX, maxX] = arg1.split('-').map(Number);
           const [minY, maxY] = arg2.split('-').map(Number);
-          steps.push({
-            type: 'tap_range',
-            minX: minX || 0,
-            maxX: maxX || minX || 0,
-            minY: minY || 0,
-            maxY: maxY || minY || 0,
-            label: `Random Tap X=[${minX}..${maxX}], Y=[${minY}..${maxY}]`
-          });
+          if (isHoldAction || (holdDuration && holdDuration > 0)) {
+            const dur = holdDuration || 1000;
+            steps.push({
+              type: 'hold_range',
+              minX: minX || 0,
+              maxX: maxX || minX || 0,
+              minY: minY || 0,
+              maxY: maxY || minY || 0,
+              holdMs: dur,
+              label: `Hold random in X=[${minX}..${maxX}], Y=[${minY}..${maxY}] for ${dur}ms`
+            });
+          } else {
+            steps.push({
+              type: 'tap_range',
+              minX: minX || 0,
+              maxX: maxX || minX || 0,
+              minY: minY || 0,
+              maxY: maxY || minY || 0,
+              label: `Random Tap X=[${minX}..${maxX}], Y=[${minY}..${maxY}]`
+            });
+          }
         } else {
           const x = parseInt(arg1, 10) || 0;
           const y = parseInt(arg2, 10) || 0;
-          steps.push({
-            type: 'tap',
-            x,
-            y,
-            label: `Tap (${x}, ${y})`
-          });
+          if (isHoldAction || (holdDuration && holdDuration > 0)) {
+            const dur = holdDuration || 1000;
+            steps.push({
+              type: 'hold',
+              x,
+              y,
+              holdMs: dur,
+              label: `Hold (${x}, ${y}) for ${dur}ms`
+            });
+          } else {
+            steps.push({
+              type: 'tap',
+              x,
+              y,
+              label: `Tap (${x}, ${y})`
+            });
+          }
         }
       } else if (action === 'loop' || action === 'repeat') {
         steps.push({
@@ -454,6 +522,12 @@ export class MacroManager {
           [minY, maxY] = arg3.split('-').map(Number);
         }
 
+        let holdMs: number | undefined;
+        const holdIdx = parts.findIndex((p) => p.toLowerCase() === 'hold' || p.toLowerCase() === 'for');
+        if (holdIdx !== -1 && parts[holdIdx + 1]) {
+          holdMs = parseDurationMs(parts[holdIdx + 1], 1000);
+        }
+
         steps.push({
           type: 'locate_and_tap',
           refPath,
@@ -461,9 +535,12 @@ export class MacroManager {
           maxX,
           minY,
           maxY,
+          holdMs,
           threshold: 0.75,
           label:
-            minX !== undefined && maxX !== undefined && minY !== undefined && maxY !== undefined
+            holdMs
+              ? `Search "${refPath}" & hold for ${holdMs}ms`
+              : minX !== undefined && maxX !== undefined && minY !== undefined && maxY !== undefined
               ? `Search "${refPath}" in X=[${minX}..${maxX}], Y=[${minY}..${maxY}] & tap`
               : `Search "${refPath}" & tap`
         });
@@ -870,7 +947,11 @@ export class MacroManager {
           case 'tap': {
             const x = step.x ?? 500;
             const y = step.y ?? 1000;
-            await adb.tap(x, y);
+            if (step.holdMs && step.holdMs > 0) {
+              await adb.hold(x, y, step.holdMs);
+            } else {
+              await adb.tap(x, y);
+            }
             break;
           }
 
@@ -879,7 +960,29 @@ export class MacroManager {
             const maxX = step.maxX ?? 100;
             const minY = step.minY ?? 0;
             const maxY = step.maxY ?? 100;
-            await adb.tapRandomRange(minX, maxX, minY, maxY);
+            if (step.holdMs && step.holdMs > 0) {
+              await adb.holdRandomRange(minX, maxX, minY, maxY, step.holdMs);
+            } else {
+              await adb.tapRandomRange(minX, maxX, minY, maxY);
+            }
+            break;
+          }
+
+          case 'hold': {
+            const x = step.x ?? 500;
+            const y = step.y ?? 1000;
+            const dur = Math.max(50, step.holdMs ?? 1000);
+            await adb.hold(x, y, dur);
+            break;
+          }
+
+          case 'hold_range': {
+            const minX = step.minX ?? 0;
+            const maxX = step.maxX ?? 100;
+            const minY = step.minY ?? 0;
+            const maxY = step.maxY ?? 100;
+            const dur = Math.max(50, step.holdMs ?? 1000);
+            await adb.holdRandomRange(minX, maxX, minY, maxY, dur);
             break;
           }
 
@@ -993,7 +1096,11 @@ export class MacroManager {
                 tapX = match.targetPoint.x;
                 tapY = match.targetPoint.y;
                 ctx.log(`✅ Visual Match (${targetName}): image is SAME (${(match.score * 100).toFixed(1)}% match in ${match.executionTimeMs}ms). Clicking inside image at (${tapX}, ${tapY})`, 'info');
-                await adb.tap(tapX, tapY);
+                if (step.holdMs && step.holdMs > 0) {
+                  await adb.hold(tapX, tapY, step.holdMs);
+                } else {
+                  await adb.tap(tapX, tapY);
+                }
                 if (isStartMacro && /as[1-4]\.png/i.test(step.refPath || '')) {
                   asCount++;
                 }

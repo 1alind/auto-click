@@ -9,7 +9,7 @@ import { StoragePaths } from './storagePaths';
 import { TemplateMatcher } from './matcher';
 
 export interface ScreenRuleActionStep {
-  type: 'tap' | 'tap_range' | 'back' | 'wait';
+  type: 'tap' | 'tap_range' | 'hold' | 'hold_range' | 'back' | 'wait';
   x?: number;
   y?: number;
   minX?: number;
@@ -17,16 +17,18 @@ export interface ScreenRuleActionStep {
   minY?: number;
   maxY?: number;
   ms?: number;
+  holdMs?: number;
 }
 
 export interface ScreenRuleAction {
-  type: 'tap' | 'tap_range' | 'back' | 'ignore' | 'sequence';
+  type: 'tap' | 'tap_range' | 'hold' | 'hold_range' | 'back' | 'ignore' | 'sequence';
   x?: number;
   y?: number;
   minX?: number;
   maxX?: number;
   minY?: number;
   maxY?: number;
+  holdMs?: number;
   steps?: ScreenRuleActionStep[];
 }
 
@@ -228,28 +230,68 @@ export class ScreenRuleManager {
             if (matchedKw.length > 0) {
               let tapRes: any = null;
               if (rule.action.type === 'tap' && rule.action.x !== undefined && rule.action.y !== undefined) {
-                tapRes = await adb.tap(rule.action.x, rule.action.y);
-              } else if (rule.action.type === 'tap_range') {
-                tapRes = await adb.tapRandomRange(
+                tapRes = (rule.action.holdMs && rule.action.holdMs > 0)
+                  ? await adb.hold(rule.action.x, rule.action.y, rule.action.holdMs)
+                  : await adb.tap(rule.action.x, rule.action.y);
+              } else if (rule.action.type === 'hold' && rule.action.x !== undefined && rule.action.y !== undefined) {
+                tapRes = await adb.hold(rule.action.x, rule.action.y, rule.action.holdMs || 1000);
+              } else if (rule.action.type === 'hold_range') {
+                tapRes = await adb.holdRandomRange(
                   rule.action.minX ?? 0,
                   rule.action.maxX ?? 100,
                   rule.action.minY ?? 0,
-                  rule.action.maxY ?? 100
+                  rule.action.maxY ?? 100,
+                  rule.action.holdMs || 1000
                 );
+              } else if (rule.action.type === 'tap_range') {
+                tapRes = (rule.action.holdMs && rule.action.holdMs > 0)
+                  ? await adb.holdRandomRange(
+                      rule.action.minX ?? 0,
+                      rule.action.maxX ?? 100,
+                      rule.action.minY ?? 0,
+                      rule.action.maxY ?? 100,
+                      rule.action.holdMs
+                    )
+                  : await adb.tapRandomRange(
+                      rule.action.minX ?? 0,
+                      rule.action.maxX ?? 100,
+                      rule.action.minY ?? 0,
+                      rule.action.maxY ?? 100
+                    );
               } else if (rule.action.type === 'back') {
                 await adb.keyEvent(4); // Android KEYCODE_BACK
                 tapRes = { back: true };
               } else if (rule.action.type === 'sequence' && rule.action.steps) {
                 for (const s of rule.action.steps) {
                   if (s.type === 'tap' && s.x !== undefined && s.y !== undefined) {
-                    tapRes = await adb.tap(s.x, s.y);
-                  } else if (s.type === 'tap_range') {
-                    tapRes = await adb.tapRandomRange(
+                    tapRes = (s.holdMs && s.holdMs > 0)
+                      ? await adb.hold(s.x, s.y, s.holdMs)
+                      : await adb.tap(s.x, s.y);
+                  } else if (s.type === 'hold' && s.x !== undefined && s.y !== undefined) {
+                    tapRes = await adb.hold(s.x, s.y, s.holdMs || 1000);
+                  } else if (s.type === 'hold_range') {
+                    tapRes = await adb.holdRandomRange(
                       s.minX ?? 0,
                       s.maxX ?? 100,
                       s.minY ?? 0,
-                      s.maxY ?? 100
+                      s.maxY ?? 100,
+                      s.holdMs || 1000
                     );
+                  } else if (s.type === 'tap_range') {
+                    tapRes = (s.holdMs && s.holdMs > 0)
+                      ? await adb.holdRandomRange(
+                          s.minX ?? 0,
+                          s.maxX ?? 100,
+                          s.minY ?? 0,
+                          s.maxY ?? 100,
+                          s.holdMs
+                        )
+                      : await adb.tapRandomRange(
+                          s.minX ?? 0,
+                          s.maxX ?? 100,
+                          s.minY ?? 0,
+                          s.maxY ?? 100
+                        );
                   } else if (s.type === 'back') {
                     await adb.keyEvent(4);
                     tapRes = { back: true };
@@ -294,14 +336,34 @@ export class ScreenRuleManager {
           if (isMatched) {
             let tapRes: any = null;
             if (rule.action.type === 'tap' && rule.action.x !== undefined && rule.action.y !== undefined) {
-              tapRes = await adb.tap(rule.action.x, rule.action.y);
-            } else if (rule.action.type === 'tap_range') {
-              tapRes = await adb.tapRandomRange(
+              tapRes = (rule.action.holdMs && rule.action.holdMs > 0)
+                ? await adb.hold(rule.action.x, rule.action.y, rule.action.holdMs)
+                : await adb.tap(rule.action.x, rule.action.y);
+            } else if (rule.action.type === 'hold' && rule.action.x !== undefined && rule.action.y !== undefined) {
+              tapRes = await adb.hold(rule.action.x, rule.action.y, rule.action.holdMs || 1000);
+            } else if (rule.action.type === 'hold_range') {
+              tapRes = await adb.holdRandomRange(
                 rule.action.minX ?? 0,
                 rule.action.maxX ?? 100,
                 rule.action.minY ?? 0,
-                rule.action.maxY ?? 100
+                rule.action.maxY ?? 100,
+                rule.action.holdMs || 1000
               );
+            } else if (rule.action.type === 'tap_range') {
+              tapRes = (rule.action.holdMs && rule.action.holdMs > 0)
+                ? await adb.holdRandomRange(
+                    rule.action.minX ?? 0,
+                    rule.action.maxX ?? 100,
+                    rule.action.minY ?? 0,
+                    rule.action.maxY ?? 100,
+                    rule.action.holdMs
+                  )
+                : await adb.tapRandomRange(
+                    rule.action.minX ?? 0,
+                    rule.action.maxX ?? 100,
+                    rule.action.minY ?? 0,
+                    rule.action.maxY ?? 100
+                  );
             } else if (rule.action.type === 'back') {
               await adb.keyEvent(4);
               tapRes = { back: true };
