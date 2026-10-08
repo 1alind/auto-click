@@ -185,12 +185,7 @@ export class DiscordBotClient {
       const dismissHint = '\n-# 💡 (react with any emoji to remove this message)';
       
       // Ensure each line starts with -#
-      const formattedBody = options.content
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0)
-        .map(line => line.startsWith('-#') ? line : `-# ${line}`)
-        .join('\n');
+      const formattedBody = this.formatContent(options.content);
 
       const body = formattedBody.includes('react with any emoji')
         ? formattedBody
@@ -285,7 +280,7 @@ export class DiscordBotClient {
         await this.clearTemporaryMedia().catch(() => {});
         const fileName = options.fileName || `screenshot_${Date.now()}.png`;
         const attachment = new AttachmentBuilder(options.fileBuffer, { name: fileName });
-        const formattedContent = options.rawContent ? (options.content || '') : this.formatContent(options.content);
+        const formattedContent = this.formatContent(options.content || '');
 
         const sent = await textChannel.send({
           content: formattedContent || undefined,
@@ -323,11 +318,11 @@ export class DiscordBotClient {
 
       let formattedContent: string | undefined;
       if (options.content !== undefined) {
-        formattedContent = options.rawContent ? options.content : this.formatContent(options.content);
+        formattedContent = this.formatContent(options.content);
       }
 
       const row = createControlButtons(isRunning);
-      const defaultContent = isRunning ? '-# airstrike working' : '-# 🟢 bot online';
+      const defaultContent = this.formatContent(isRunning ? 'airstrike working' : '🟢 bot online');
       const contentToSend = formattedContent !== undefined ? formattedContent : defaultContent;
 
       let currentDashboardId = this.getDashboardMessageId();
@@ -380,7 +375,13 @@ export class DiscordBotClient {
       if (!channel || !channel.isTextBased()) {
         return { success: false, error: 'Channel not found or not text-based' };
       }
-      const sent = await (channel as any).send(options);
+      
+      const formattedOptions = { ...options };
+      if (options.content) {
+        formattedOptions.content = this.formatContent(options.content);
+      }
+      
+      const sent = await (channel as any).send(formattedOptions);
       return { success: true, messageId: sent?.id };
     } catch (err: any) {
       return { success: false, error: err.message };
