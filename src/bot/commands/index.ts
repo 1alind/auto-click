@@ -294,24 +294,13 @@ export const buttonsCommand: CommandDefinition = {
 
     const row = createControlButtons(isRunning);
     const webhook = botManager.getWebhookService();
-    const discordClient = botManager.getDiscordBot();
 
-    let sent = false;
-    if (discordClient && discordClient.isConnected() && ctx.channelId) {
-      const res = await discordClient.sendToChannel(ctx.channelId, {
-        content,
-        components: [row]
-      });
-      if (res.success) sent = true;
-    }
-
-    if (!sent && webhook.isConfigured()) {
+    if (webhook.isConfigured()) {
       await webhook.send({
         content,
         rawContent: true,
         components: [row.toJSON()]
       });
-      sent = true;
     }
 
     return { success: true, message: 'control panel displayed' };

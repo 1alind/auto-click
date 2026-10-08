@@ -609,19 +609,9 @@ export class MacroManager {
       const content = getLiveStatusContent(statusText);
       const components = createControlButtonsJson(statusText === 'working');
       try {
-        if (!liveStatusMsgId) {
-          const res = await webhook.send({ content, rawContent: true, components });
-          if (res.success && res.messageId) {
-            liveStatusMsgId = res.messageId;
-          }
-        } else {
-          const editRes = await webhook.edit(liveStatusMsgId, { content, rawContent: true, components });
-          if (!editRes.success) {
-            const res = await webhook.send({ content, rawContent: true, components });
-            if (res.success && res.messageId) {
-              liveStatusMsgId = res.messageId;
-            }
-          }
+        const res = await webhook.send({ content, rawContent: true, components });
+        if (res.success && res.messageId) {
+          liveStatusMsgId = res.messageId;
         }
       } catch {
         // ignore transient network error
@@ -637,14 +627,7 @@ export class MacroManager {
     const updateProgress = async (text: string) => {
       if (!webhook.isConfigured()) return;
       try {
-        if (!progressMsgId) {
-          const res = await webhook.send({ content: text });
-          if (res.success && res.messageId) {
-            progressMsgId = res.messageId;
-          }
-        } else {
-          await webhook.edit(progressMsgId, { content: text });
-        }
+        await webhook.send({ content: text });
       } catch {
         // ignore transient webhook progress errors
       }

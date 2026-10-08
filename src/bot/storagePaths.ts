@@ -71,6 +71,10 @@ export class StoragePaths {
     return dir;
   }
 
+  public static getDashboardMessagePath(): string {
+    return path.join(this.getConfigDir(), 'dashboard-message.json');
+  }
+
   public static getLogsDir(): string {
     const dir = path.join(this.getBaseDir(), 'logs');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });

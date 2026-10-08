@@ -273,6 +273,9 @@ export class DiscordBotClient {
           await MacroManager.waitForFind();
         }
         await command.execute(ctx);
+        setTimeout(() => {
+          message.delete().catch(() => {});
+        }, 3000);
       } catch (err: any) {
         ConsoleLogger.error(err, `command ${commandKey}`);
         this.log(`Error executing command ${commandKey}: ${err.message}`, 'error', err);
@@ -301,6 +304,13 @@ export class DiscordBotClient {
 
       // Acknowledge interaction quickly so Discord doesn't timeout
       await interaction.deferUpdate().catch(() => {});
+
+      // Clear any temporary screenshot so the channel cleanly returns to 1 message
+      try {
+        const { botManager } = await import('./botManager');
+        const webhook = botManager.getWebhookService();
+        await webhook.clearTemporaryMedia().catch(() => {});
+      } catch {}
 
       let commandName = '';
       let args: string[] = [];
