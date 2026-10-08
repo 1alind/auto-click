@@ -6,6 +6,7 @@ import { TemplateMatcher } from './matcher';
 import { RefImageManager } from './refImage';
 import { screenRuleManager, ScreenRuleManager } from './screenRuleManager';
 import { StoragePaths } from './storagePaths';
+import { createControlButtonsJson } from './discordButtons';
 
 export type MacroActionType =
   | 'tap'
@@ -606,16 +607,17 @@ export class MacroManager {
     const updateLiveStatus = async (statusText: string = 'working') => {
       if (!webhook.isConfigured()) return;
       const content = getLiveStatusContent(statusText);
+      const components = createControlButtonsJson(statusText === 'working');
       try {
         if (!liveStatusMsgId) {
-          const res = await webhook.send({ content, rawContent: true });
+          const res = await webhook.send({ content, rawContent: true, components });
           if (res.success && res.messageId) {
             liveStatusMsgId = res.messageId;
           }
         } else {
-          const editRes = await webhook.edit(liveStatusMsgId, { content, rawContent: true });
+          const editRes = await webhook.edit(liveStatusMsgId, { content, rawContent: true, components });
           if (!editRes.success) {
-            const res = await webhook.send({ content, rawContent: true });
+            const res = await webhook.send({ content, rawContent: true, components });
             if (res.success && res.messageId) {
               liveStatusMsgId = res.messageId;
             }

@@ -28,7 +28,8 @@ import {
   stopCommand,
   testCommand,
   liveCommand,
-  clearCommand
+  clearCommand,
+  buttonsCommand
 } from './commands/index';
 import { RefImageManager } from './refImage';
 import { CrashHandler } from './crashHandler';
@@ -126,6 +127,7 @@ export class BotManager {
     this.discord.registerCommand(aiCommand);
     this.discord.registerCommand(moveCommand);
     this.discord.registerCommand(clearCommand);
+    this.discord.registerCommand(buttonsCommand);
 
     // Load and register all saved custom macros as direct commands (e.g. "start")
     import('./macroManager').then(({ MacroManager }) => {
@@ -181,6 +183,10 @@ export class BotManager {
   }
 
   public getDiscordBot(): DiscordBotClient {
+    return this.discord;
+  }
+
+  public getDiscordBotClient(): DiscordBotClient {
     return this.discord;
   }
 

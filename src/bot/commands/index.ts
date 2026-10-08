@@ -276,6 +276,48 @@ export const statusCommand: CommandDefinition = {
   }
 };
 
+export const buttonsCommand: CommandDefinition = {
+  name: 'buttons',
+  description: 'Displays Discord interactive control buttons (Start, Stop, Fixac, Status, Screenshot).',
+  usage: 'buttons',
+  aliases: ['panel', 'controls', 'menu', 'btn'],
+
+  execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const { botManager } = await import('../botManager');
+    const { MacroManager } = await import('../macroManager');
+    const { createControlButtons } = await import('../discordButtons');
+
+    const isRunning = MacroManager.isStartRunning();
+    const content = isRunning
+      ? '-# 🎮 **Control Panel** (airstrike: `working`)\n-# Tap a button below to control the bot:'
+      : '-# 🎮 **Control Panel** (airstrike: `idle`)\n-# Tap a button below to control the bot:';
+
+    const row = createControlButtons(isRunning);
+    const webhook = botManager.getWebhookService();
+    const discordClient = botManager.getDiscordBot();
+
+    let sent = false;
+    if (discordClient && discordClient.isConnected() && ctx.channelId) {
+      const res = await discordClient.sendToChannel(ctx.channelId, {
+        content,
+        components: [row]
+      });
+      if (res.success) sent = true;
+    }
+
+    if (!sent && webhook.isConfigured()) {
+      await webhook.send({
+        content,
+        rawContent: true,
+        components: [row.toJSON()]
+      });
+      sent = true;
+    }
+
+    return { success: true, message: 'control panel displayed' };
+  }
+};
+
 export const updateCommand: CommandDefinition = {
   name: 'update',
   description: 'Checks GitHub for updates, pulls latest code (git pull), and restarts the bot.',
@@ -1272,6 +1314,18 @@ const COMMAND_MANUALS: Record<string, string> = {
     '**status** — Show bot & ADB status',
     'usage: `status`',
     'displays ADB status, active device, match threshold, auto-update status, and uptime'
+  ].join('\n'),
+
+  buttons: [
+    '**buttons** (or `panel`) — Interactive Discord control buttons',
+    'usage: `buttons` or `panel`',
+    'displays clickable Discord buttons for Stop, Start, Fixac, Status, and Screenshot'
+  ].join('\n'),
+
+  panel: [
+    '**panel** (or `buttons`) — Interactive Discord control buttons',
+    'usage: `panel` or `buttons`',
+    'displays clickable Discord buttons for Stop, Start, Fixac, Status, and Screenshot'
   ].join('\n'),
 
   update: [

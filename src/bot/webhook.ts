@@ -3,6 +3,7 @@ export interface WebhookSendOptions {
   username?: string;
   avatarUrl?: string;
   embeds?: any[];
+  components?: any[];
   fileBuffer?: Buffer;
   fileName?: string;
   rawContent?: boolean;
@@ -94,13 +95,34 @@ export class WebhookService {
         if (options.avatarUrl) {
           payloadJson.avatar_url = options.avatarUrl;
         }
+        if (options.components) {
+          payloadJson.components = options.components;
+        }
 
         formData.append('payload_json', JSON.stringify(payloadJson));
 
-        const response = await fetch(targetUrl, {
+        let response = await fetch(targetUrl, {
           method: 'POST',
           body: formData
         });
+
+        if (!response.ok && options.components) {
+          const errText = await response.text();
+          if (errText.toLowerCase().includes('component')) {
+            // Webhook not owned by application; retry without components
+            const fallbackForm = new FormData();
+            const fallbackBlob = new Blob([new Uint8Array(options.fileBuffer)], { type: 'image/png' });
+            fallbackForm.append('files[0]', fallbackBlob, fileName);
+            delete payloadJson.components;
+            fallbackForm.append('payload_json', JSON.stringify(payloadJson));
+            response = await fetch(targetUrl, {
+              method: 'POST',
+              body: fallbackForm
+            });
+          } else {
+            return { success: false, status: response.status, error: `Webhook HTTP ${response.status}: ${errText}` };
+          }
+        }
 
         if (!response.ok) {
           const errText = await response.text();
@@ -117,12 +139,28 @@ export class WebhookService {
         };
 
         if (options.avatarUrl) payload.avatar_url = options.avatarUrl;
+        if (options.components) payload.components = options.components;
 
-        const response = await fetch(targetUrl, {
+        let response = await fetch(targetUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
+
+        if (!response.ok && options.components) {
+          const errText = await response.text();
+          if (errText.toLowerCase().includes('component')) {
+            // Webhook not owned by application; retry without components
+            delete payload.components;
+            response = await fetch(targetUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+          } else {
+            return { success: false, status: response.status, error: `Webhook HTTP ${response.status}: ${errText}` };
+          }
+        }
 
         if (!response.ok) {
           const errText = await response.text();
@@ -162,13 +200,31 @@ export class WebhookService {
           content: formattedContent,
           allowed_mentions: { parse: [] }
         };
+        if (options.components) payloadJson.components = options.components;
 
         formData.append('payload_json', JSON.stringify(payloadJson));
 
-        const response = await fetch(editUrl, {
+        let response = await fetch(editUrl, {
           method: 'PATCH',
           body: formData
         });
+
+        if (!response.ok && options.components) {
+          const errText = await response.text();
+          if (errText.toLowerCase().includes('component')) {
+            const fallbackForm = new FormData();
+            const fallbackBlob = new Blob([new Uint8Array(options.fileBuffer)], { type: 'image/png' });
+            fallbackForm.append('files[0]', fallbackBlob, fileName);
+            delete payloadJson.components;
+            fallbackForm.append('payload_json', JSON.stringify(payloadJson));
+            response = await fetch(editUrl, {
+              method: 'PATCH',
+              body: fallbackForm
+            });
+          } else {
+            return { success: false, status: response.status, error: `Webhook PATCH HTTP ${response.status}: ${errText}` };
+          }
+        }
 
         if (!response.ok) {
           const errText = await response.text();
@@ -181,12 +237,27 @@ export class WebhookService {
           content: formattedContent,
           allowed_mentions: { parse: [] }
         };
+        if (options.components) payload.components = options.components;
 
-        const response = await fetch(editUrl, {
+        let response = await fetch(editUrl, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
+
+        if (!response.ok && options.components) {
+          const errText = await response.text();
+          if (errText.toLowerCase().includes('component')) {
+            delete payload.components;
+            response = await fetch(editUrl, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+          } else {
+            return { success: false, status: response.status, error: `Webhook PATCH HTTP ${response.status}: ${errText}` };
+          }
+        }
 
         if (!response.ok) {
           const errText = await response.text();

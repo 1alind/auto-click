@@ -40,6 +40,29 @@ export class DiscordBotClient {
     return Boolean(this.client && this.client.isReady());
   }
 
+  public getClient(): Client | null {
+    return this.client;
+  }
+
+  public async sendToChannel(
+    channelId: string,
+    options: { content?: string; components?: any[]; files?: any[] }
+  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    if (!this.client || !this.client.isReady()) {
+      return { success: false, error: 'Discord Bot is not connected' };
+    }
+    try {
+      const channel = await this.client.channels.fetch(channelId).catch(() => null);
+      if (!channel || !channel.isTextBased()) {
+        return { success: false, error: 'Channel not found or not text-based' };
+      }
+      const sent = await (channel as any).send(options);
+      return { success: true, messageId: sent?.id };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
   public getBotUser(): { id: string; tag: string; username: string } | null {
     if (!this.client || !this.client.user) return null;
     return {
@@ -264,6 +287,98 @@ export class DiscordBotClient {
         } catch {
           // ignore
         }
+      }
+    });
+
+    this.client.on(Events.InteractionCreate, async (interaction) => {
+      if (!interaction.isButton()) return;
+
+      // Allow configured channel or DMs
+      if (interaction.channelId && interaction.channelId !== '1553844985776836638') return;
+
+      const customId = interaction.customId;
+      this.log(`🔘 Button clicked: "${customId}" by ${interaction.user.tag}`, 'info');
+
+      // Acknowledge interaction quickly so Discord doesn't timeout
+      await interaction.deferUpdate().catch(() => {});
+
+      let commandName = '';
+      let args: string[] = [];
+
+      switch (customId) {
+        case 'btn_stop':
+          commandName = 'stop';
+          break;
+        case 'btn_start':
+          commandName = 'start';
+          break;
+        case 'btn_fixac':
+          commandName = 'fixac';
+          break;
+        case 'btn_status':
+          commandName = 'status';
+          break;
+        case 'btn_screenshot':
+          commandName = 'screenshot';
+          break;
+        case 'btn_test':
+          commandName = 'test';
+          break;
+        default:
+          if (customId.startsWith('cmd_')) {
+            const raw = customId.slice(4);
+            const parts = raw.split('_');
+            commandName = parts[0];
+            args = parts.slice(1);
+          }
+          break;
+      }
+
+      if (!commandName) return;
+
+      const command = this.commands.get(commandName.toLowerCase());
+      if (!command) {
+        this.log(`Command for button "${customId}" not found`, 'warn');
+        return;
+      }
+
+      const ctx: CommandContext = {
+        commandName,
+        args,
+        author: {
+          id: interaction.user.id,
+          tag: interaction.user.tag,
+          username: interaction.user.username
+        },
+        channelId: interaction.channelId,
+        reply: async (replyText: string) => {
+          try {
+            const { botManager } = await import('./botManager');
+            const webhook = botManager.getWebhookService();
+            if (webhook.isConfigured()) {
+              await webhook.send({ content: replyText });
+            } else if (interaction.channel && 'send' in interaction.channel) {
+              await (interaction.channel as any).send(replyText);
+            }
+          } catch (e: any) {
+            this.log(`Failed to reply to button action: ${e.message}`, 'warn');
+          }
+        },
+        log: (msg: string, level = 'info', meta?: any) => {
+          this.log(msg, level, meta);
+        }
+      };
+
+      try {
+        const { MacroManager } = await import('./macroManager');
+        if (MacroManager.isFindRunning()) {
+          this.log(`⏳ Button "${commandName}" queued — waiting for "find" to finish...`, 'info');
+          await MacroManager.waitForFind();
+        }
+        await command.execute(ctx);
+      } catch (err: any) {
+        ConsoleLogger.error(err, `button ${commandName}`);
+        this.log(`Error executing button ${commandName}: ${err.message}`, 'error', err);
       }
     });
 
