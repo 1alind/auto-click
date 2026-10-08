@@ -587,12 +587,11 @@ export class DiscordBotClient {
           await MacroManager.waitForFind();
         }
         await command.execute(ctx);
-        setTimeout(() => {
-          message.delete().catch(() => {});
-        }, 3000);
+        await message.delete().catch(() => {});
       } catch (err: any) {
         ConsoleLogger.error(err, `command ${commandKey}`);
         this.log(`Error executing command ${commandKey}: ${err.message}`, 'error', err);
+        await message.delete().catch(() => {});
         try {
           await this.sendErrorMessage({ content: `❌ error executing ${commandKey}: ${err.message}` });
         } catch {

@@ -158,7 +158,9 @@ export class BotManager {
         if (onlineLocal) {
           this.adb.setSerial(onlineLocal.serial);
           this.adb.setHost(onlineLocal.serial);
-          if (this.webhook.isConfigured()) {
+          if (this.discord.isConnected()) {
+            await this.discord.updateDashboard({ content: `connected to ${onlineLocal.serial}` }).catch(() => {});
+          } else if (this.webhook.isConfigured()) {
             await this.webhook.send({ content: `connected to ${onlineLocal.serial}` }).catch(() => {});
           }
         }
