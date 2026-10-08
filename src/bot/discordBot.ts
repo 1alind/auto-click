@@ -788,6 +788,9 @@ export class DiscordBotClient {
         }
       } catch (err: any) {
         this.log(`Failed to delete message on reaction: ${err.message}`, 'warn');
+        try {
+          await this.sendErrorMessage({ content: `❌ reaction error: ${err.message}` });
+        } catch {}
       }
     });
 
