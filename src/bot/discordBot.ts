@@ -561,18 +561,24 @@ export class DiscordBotClient {
         discordMessage: message,
         reply: async (replyText: string) => {
           try {
-            if (
-              replyText.startsWith('❌') ||
-              replyText.toLowerCase().includes('not found') ||
-              replyText.toLowerCase().startsWith('error:') ||
-              replyText.toLowerCase().startsWith('error ')
-            ) {
-              await this.sendErrorMessage({ content: replyText });
-            } else {
-              await this.updateDashboard({ content: replyText });
+            // Always send a separate new message for command replies instead of updating the main dashboard
+            const sentReply = await this.sendErrorMessage({ content: replyText });
+            if (sentReply.messageId) {
+              // Auto-delete the command reply message after 2 minutes (120,000ms)
+              setTimeout(async () => {
+                try {
+                  if (this.client && this.client.isReady()) {
+                    const channel = await this.client.channels.fetch(this.targetChannelId).catch(() => null);
+                    if (channel && channel.isTextBased()) {
+                      const m = await (channel as any).messages.fetch(sentReply.messageId).catch(() => null);
+                      if (m) await m.delete().catch(() => {});
+                    }
+                  }
+                } catch {}
+              }, 120 * 1000);
             }
           } catch (e: any) {
-            this.log(`Failed to update dashboard message: ${e.message}`, 'warn');
+            this.log(`Failed to send command reply message: ${e.message}`, 'warn');
           }
         },
         log: (msg: string, level = 'info', meta?: any) => {
@@ -718,12 +724,15 @@ export class DiscordBotClient {
         const msg = reaction.message;
         const msgId = msg.id;
 
-        // If any message sent by the bot receives a reaction, delete it!
+        // If any message sent by the bot receives a reaction, delete it (EXCEPT the main dashboard message)
         if (msg.author?.id === this.client?.user?.id) {
-          this.removeDismissableErrorMessage(msgId);
-          if (msgId === this.getDashboardMessageId()) {
-            this.saveDashboardMessageId(null);
+          const dashboardId = this.getDashboardMessageId();
+          if (msgId === dashboardId) {
+            // Never delete the main dashboard message even if reacted to
+            return;
           }
+
+          this.removeDismissableErrorMessage(msgId);
           this.log(`🗑️ User ${user.tag} reacted to bot message (${msgId}). Removing message...`, 'info');
           await msg.delete().catch(() => {});
         }
