@@ -595,11 +595,11 @@ export class MacroManager {
 
     const getLiveStatusContent = (statusText: string = 'working'): string => {
       return [
-        `airstrike ${statusText}`,
-        `AS count: ${asCount}`,
-        `AC-Fix count: ${acFixCount}`,
-        `repair-count: ${repairCount}`,
-        `datenow: ${formatTimeNow()}`
+        `-# airstrike ${statusText}`,
+        `-# AS count: ${asCount}`,
+        `-# AC-Fix count: ${acFixCount}`,
+        `-# repair-count: ${repairCount}`,
+        `-# datenow: ${formatTimeNow()}`
       ].join('\n');
     };
 
@@ -651,14 +651,8 @@ export class MacroManager {
     const autoFixacEnabled =
       isStartMacro && (!Array.isArray(ctx.args) || !ctx.args.some((a) => a.toLowerCase() === 'nofixac'));
 
-    if (isLoopMacro) {
-      await updateProgress(
-        isStartMacro
-          ? options?.resumeStep && options.resumeStep > 1
-            ? `${macro.name} (auto-fixac): resumed from step ${options.resumeStep} (cycle #${loopCount})`
-            : `${macro.name} (auto-fixac every 5–6m): loop started (send \`stop\` to stop before step 1, 7, 13, or 19)`
-          : `${macro.name}: loop started (send \`stop\` to stop before step 1)`
-      );
+    if (isLoopMacro && !isStartMacro) {
+      await updateProgress(`${macro.name}: loop started (send \`stop\` to stop before step 1)`);
     }
 
     // Random interval between 5 and 6 minutes (300,000ms to 360,000ms) for auto-running fixac during `start fixac`
