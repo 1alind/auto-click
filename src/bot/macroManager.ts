@@ -692,19 +692,44 @@ export class MacroManager {
     let repairCount = isResuming && persistedState?.repairCount !== undefined ? persistedState.repairCount : 0;
     let liveStatusMsgId: string | undefined = isResuming ? persistedState?.liveStatusMsgId : undefined;
 
-    const formatTimeNow = (): string => {
-      const d = new Date();
+    const startTime = Date.now();
+
+    const format12HourTime = (d: Date): string => {
+      let hours = d.getHours();
+      const minutes = d.getMinutes();
+      const seconds = d.getSeconds();
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      hours = hours % 12;
+      hours = hours ? hours : 12; // the hour '0' should be '12'
       const pad = (n: number) => String(n).padStart(2, '0');
-      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      return `${pad(hours)}:${pad(minutes)}:${pad(seconds)} ${ampm}`;
+    };
+
+    const formatWorkingTime = (ms: number): string => {
+      const totalSec = Math.floor(ms / 1000);
+      const hours = Math.floor(totalSec / 3600);
+      const minutes = Math.floor((totalSec % 3600) / 60);
+      const seconds = totalSec % 60;
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
     };
 
     const getLiveStatusContent = (statusText: string = 'working'): string => {
+      const elapsedMs = Date.now() - startTime;
+      const now = new Date();
+      // Updated time from git/now
+      const updatedTimeStr = format12HourTime(now);
+      const dateStr = format12HourTime(now);
+      const workingTimeStr = formatWorkingTime(elapsedMs);
+
       return [
-        `-# airstrike ${statusText}`,
-        `-# AS count: ${asCount}`,
-        `-# AC-Fix count: ${acFixCount}`,
-        `-# repair-count: ${repairCount}`,
-        `-# datenow: ${formatTimeNow()}`
+        `working: ${macro.name}`,
+        `AS count : ${asCount}`,
+        `AC-Fix count: ${acFixCount}`,
+        `Repair count: ${repairCount}`,
+        `Updated: ${updatedTimeStr}`,
+        `Date: ${dateStr}`,
+        `Working-time: ${workingTimeStr}`
       ].join('\n');
     };
 
@@ -1597,10 +1622,10 @@ export class MacroManager {
       }
     }
 
-    const existingStart = this.macros.get('start');
+    const existingStart = this.macros.get('airstrike') || this.macros.get('start');
     if (!existingStart || existingStart.steps.length !== 25) {
       const defaultStart: CustomMacro = {
-        name: 'start',
+        name: 'airstrike',
         description: 'Custom macro with visual matching on asbtn.png and as1–as4.png (loops continuously)',
         createdAt: new Date().toISOString(),
         steps: [
@@ -1774,7 +1799,8 @@ export class MacroManager {
           }
         ]
       };
-      this.macros.set('start', defaultStart);
+      this.macros.set('airstrike', defaultStart);
+      this.macros.delete('start');
       this.persist();
     } else {
       let updated = false;

@@ -360,16 +360,6 @@ export class AutoUpdater {
         }
       }, 60 * 1000);
 
-      if (!isAuto) {
-        try {
-          const { botManager } = await import('./botManager');
-          const discord = botManager.getDiscordBot();
-          if (discord.isConnected()) {
-            await discord.sendErrorMessage({ content: errorMsg });
-          }
-        } catch {}
-      }
-
       return { success: false, message: errorMsg };
     }
   }
