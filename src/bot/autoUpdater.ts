@@ -360,12 +360,14 @@ export class AutoUpdater {
         }
       }, 60 * 1000);
 
-      if (!isAuto && this.webhookService && this.webhookService.isConfigured()) {
-        await this.webhookService
-          .send({
-            content: errorMsg
-          })
-          .catch(() => {});
+      if (!isAuto) {
+        try {
+          const { botManager } = await import('./botManager');
+          const discord = botManager.getDiscordBot();
+          if (discord.isConnected()) {
+            await discord.sendErrorMessage({ content: errorMsg });
+          }
+        } catch {}
       }
 
       return { success: false, message: errorMsg };

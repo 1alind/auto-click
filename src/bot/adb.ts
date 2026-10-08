@@ -146,10 +146,6 @@ export class AdbController {
         const discord = botManager.getDiscordBot();
         if (discord.isConnected()) {
           await discord.updateDashboard({ content: text });
-          return;
-        }
-        if (webhook.isConfigured()) {
-          await webhook.send({ content: text });
         }
       } catch {
         // ignore error

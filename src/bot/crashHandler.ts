@@ -35,18 +35,15 @@ export class CrashHandler {
 
     const errorMessage = error?.message || 'Unknown error';
 
-    // Send alert message to Discord via Webhook
-    if (this.webhookService && this.webhookService.isConfigured()) {
-      try {
+    // Send alert message to Discord via Discord Bot
+    try {
+      const { botManager } = await import('./botManager');
+      const discord = botManager.getDiscordBot();
+      if (discord.isConnected()) {
         const text = `-# **crashed** *(${type}: ${errorMessage.slice(0, 120)})* • restarting`;
-
-        await this.webhookService.send({
-          content: text
-        });
-      } catch (webhookErr) {
-        // silent
+        await discord.sendErrorMessage({ content: text });
       }
-    }
+    } catch {}
 
     if (this.onCrashCallback) {
       try {
