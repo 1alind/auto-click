@@ -318,26 +318,10 @@ export class DiscordBotClient {
 
       if (currentDashboardId && !options.forceNewMessage) {
         existingMsg = await textChannel.messages.fetch(currentDashboardId).catch(() => null);
-      }
-
-      // If existing msg ID wasn't found or was deleted, scan the channel to find any existing bot message
-      if (!existingMsg && !options.forceNewMessage && this.client?.user) {
-        try {
-          const recent = await textChannel.messages.fetch({ limit: 20 }).catch(() => null);
-          if (recent) {
-            const botMsgs = recent.filter((m: any) => m.author.id === this.client!.user!.id);
-            if (botMsgs.size > 0) {
-              existingMsg = botMsgs.first();
-              this.saveDashboardMessageId(existingMsg.id);
-
-              // Delete any older duplicate bot messages to guarantee exactly ONE message in channel
-              const extras = botMsgs.filter((m: any) => m.id !== existingMsg.id);
-              for (const extra of extras.values()) {
-                await extra.delete().catch(() => {});
-              }
-            }
-          }
-        } catch {}
+        if (!existingMsg) {
+          // If messageId was deleted or not found, clear it so a clean new dashboard message is created
+          this.saveDashboardMessageId(null);
+        }
       }
 
       if (existingMsg) {
@@ -734,21 +718,18 @@ export class DiscordBotClient {
 
         const msg = reaction.message;
         const msgId = msg.id;
-        const isDismissable = this.isDismissableErrorMessage(msgId);
-        const isBotErrorMsg =
-          msg.author?.id === this.client?.user?.id &&
-          (msg.content?.includes('❌') ||
-            msg.content?.toLowerCase().includes('not found') ||
-            msg.content?.includes('react with any emoji') ||
-            msg.content?.toLowerCase().includes('error:'));
 
-        if (isDismissable || isBotErrorMsg) {
+        // If any message sent by the bot receives a reaction, delete it!
+        if (msg.author?.id === this.client?.user?.id) {
           this.removeDismissableErrorMessage(msgId);
-          this.log(`🗑️ User ${user.tag} reacted to error message (${msgId}). Removing message...`, 'info');
+          if (msgId === this.getDashboardMessageId()) {
+            this.saveDashboardMessageId(null);
+          }
+          this.log(`🗑️ User ${user.tag} reacted to bot message (${msgId}). Removing message...`, 'info');
           await msg.delete().catch(() => {});
         }
       } catch (err: any) {
-        this.log(`Failed to delete error message on reaction: ${err.message}`, 'warn');
+        this.log(`Failed to delete message on reaction: ${err.message}`, 'warn');
       }
     });
 
