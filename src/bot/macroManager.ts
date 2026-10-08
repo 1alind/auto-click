@@ -723,13 +723,13 @@ export class MacroManager {
       const workingTimeStr = formatWorkingTime(elapsedMs);
 
       return [
-        `working: ${macro.name}`,
-        `AS count : ${asCount}`,
-        `AC-Fix count: ${acFixCount}`,
-        `Repair count: ${repairCount}`,
-        `Updated: ${updatedTimeStr}`,
-        `Date: ${dateStr}`,
-        `Working-time: ${workingTimeStr}`
+        `-# working: ${macro.name}`,
+        `-# AS count : ${asCount}`,
+        `-# AC-Fix count: ${acFixCount}`,
+        `-# Repair count: ${repairCount}`,
+        `-# Updated: ${updatedTimeStr}`,
+        `-# Date: ${dateStr}`,
+        `-# Working-time: ${workingTimeStr}`
       ].join('\n');
     };
 

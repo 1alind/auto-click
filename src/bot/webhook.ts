@@ -82,11 +82,14 @@ export class WebhookService {
       if (discordBot.isConnected()) {
         const client = discordBot.getClient();
         if (client && client.isReady()) {
-          const ch = await client.channels.fetch(discordBot.getTargetChannelId()).catch(() => null);
-          if (ch && ch.isTextBased()) {
-            const m = await (ch as any).messages.fetch(messageId).catch(() => null);
-            if (m) await m.delete().catch(() => {});
-            return true;
+          const targetId = discordBot.getTargetChannelId();
+          if (targetId) {
+            const ch = await client.channels.fetch(targetId).catch(() => null);
+            if (ch && ch.isTextBased()) {
+              const m = await (ch as any).messages.fetch(messageId).catch(() => null);
+              if (m) await m.delete().catch(() => {});
+              return true;
+            }
           }
         }
       }

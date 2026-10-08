@@ -78,7 +78,7 @@ export class DiscordBotClient {
     return this.client;
   }
 
-  public getTargetChannelId(): string {
+  public getTargetChannelId(): string | null {
     return this.targetChannelId;
   }
 
@@ -183,9 +183,18 @@ export class DiscordBotClient {
       }
 
       const dismissHint = '\n-# 💡 (react with any emoji to remove this message)';
-      const body = options.content.includes('react with any emoji')
-        ? options.content
-        : `${options.content}${dismissHint}`;
+      
+      // Ensure each line starts with -#
+      const formattedBody = options.content
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .map(line => line.startsWith('-#') ? line : `-# ${line}`)
+        .join('\n');
+
+      const body = formattedBody.includes('react with any emoji')
+        ? formattedBody
+        : `${formattedBody}${dismissHint}`;
 
       const sentMsg = await textChannel.send({
         content: body,
@@ -211,7 +220,8 @@ export class DiscordBotClient {
       .map((line) => {
         const trimmed = line.trim();
         if (!trimmed) return '';
-        return trimmed.startsWith('-#') ? trimmed : `-# ${trimmed}`;
+        // If it's already a component/button-only line (starting with <) or already formatted, leave it, else prepend -#
+        return trimmed.startsWith('-#') || trimmed.startsWith('<') ? trimmed : `-# ${trimmed}`;
       })
       .filter(Boolean)
       .join('\n');
@@ -226,7 +236,7 @@ export class DiscordBotClient {
       const id = this.lastMediaMessageId;
       this.lastMediaMessageId = null;
       try {
-        const channel = await this.client.channels.fetch(this.targetChannelId).catch(() => null);
+        const channel = await this.client.channels.fetch(this.targetChannelId!).catch(() => null);
         if (channel && channel.isTextBased()) {
           const msg = await (channel as any).messages.fetch(id).catch(() => null);
           if (msg) await msg.delete().catch(() => {});
@@ -239,7 +249,7 @@ export class DiscordBotClient {
     if (!this.client || !this.client.isReady()) return null;
 
     if (this.targetChannelId) {
-      const ch = await this.client.channels.fetch(this.targetChannelId).catch(() => null);
+      const ch = await this.client.channels.fetch(this.targetChannelId!).catch(() => null);
       if (ch && ch.isTextBased()) return ch;
     }
 
@@ -605,7 +615,7 @@ export class DiscordBotClient {
               setTimeout(async () => {
                 try {
                   if (this.client && this.client.isReady()) {
-                    const channel = await this.client.channels.fetch(this.targetChannelId).catch(() => null);
+                    const channel = await this.client.channels.fetch(this.targetChannelId!).catch(() => null);
                     if (channel && channel.isTextBased()) {
                       const m = await (channel as any).messages.fetch(sentReply.messageId).catch(() => null);
                       if (m) await m.delete().catch(() => {});

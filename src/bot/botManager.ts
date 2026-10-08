@@ -65,7 +65,6 @@ export class BotManager {
     this.discord = new DiscordBotClient({
       token: this.config.discordToken,
       prefix: this.config.prefix,
-      targetChannelId: this.config.targetChannelId,
       onLog: (msg, level, data) => this.addLog(msg, level as any, data)
     });
 
