@@ -68,6 +68,10 @@ export interface StartStateStats {
   cycleCount: number;
   totalStepsExecuted: number;
   nextFixacRemainingMs: number;
+  asCount?: number;
+  acFixCount?: number;
+  repairCount?: number;
+  liveStatusMsgId?: string;
   updatedAt: string;
 }
 
@@ -138,6 +142,7 @@ export class MacroManager {
   private static stoppingForUpdate = false;
   private static runningMacroName: string | null = null;
   private static cycleStopWaiters: Array<() => void> = [];
+  private static liveStatusInterval: NodeJS.Timeout | null = null;
 
   private static findRunning = false;
   private static findWaiters: Array<() => void> = [];
@@ -167,6 +172,10 @@ export class MacroManager {
       cycleCount: 0,
       totalStepsExecuted: 0,
       nextFixacRemainingMs: 300000,
+      asCount: 0,
+      acFixCount: 0,
+      repairCount: 0,
+      liveStatusMsgId: undefined,
       updatedAt: new Date().toISOString()
     };
     try {
@@ -322,6 +331,10 @@ export class MacroManager {
   }
 
   private static notifyCycleStopped(): void {
+    if (this.liveStatusInterval) {
+      clearInterval(this.liveStatusInterval);
+      this.liveStatusInterval = null;
+    }
     this.runningMacroName = null;
     const waiters = [...this.cycleStopWaiters];
     this.cycleStopWaiters = [];
@@ -566,8 +579,52 @@ export class MacroManager {
     const isLoopMacro = macro.steps.some((s) => s.type === 'loop');
 
     const persistedState = isStartMacro ? this.loadStartState() : null;
-    let loopCount = persistedState ? persistedState.cycleCount : 0;
-    let totalStepsExecuted = persistedState ? persistedState.totalStepsExecuted : 0;
+    const isResuming = Boolean(options?.resumeStep && options.resumeStep > 1);
+    let loopCount = isResuming && persistedState ? persistedState.cycleCount : 0;
+    let totalStepsExecuted = isResuming && persistedState ? persistedState.totalStepsExecuted : 0;
+    let asCount = isResuming && persistedState?.asCount !== undefined ? persistedState.asCount : loopCount * 4;
+    let acFixCount = isResuming && persistedState?.acFixCount !== undefined ? persistedState.acFixCount : 0;
+    let repairCount = isResuming && persistedState?.repairCount !== undefined ? persistedState.repairCount : 0;
+    let liveStatusMsgId: string | undefined = isResuming ? persistedState?.liveStatusMsgId : undefined;
+
+    const formatTimeNow = (): string => {
+      const d = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    };
+
+    const getLiveStatusContent = (statusText: string = 'working'): string => {
+      return [
+        `airstrike ${statusText}`,
+        `AS count: ${asCount}`,
+        `AC-Fix count: ${acFixCount}`,
+        `repair-count: ${repairCount}`,
+        `datenow: ${formatTimeNow()}`
+      ].join('\n');
+    };
+
+    const updateLiveStatus = async (statusText: string = 'working') => {
+      if (!webhook.isConfigured()) return;
+      const content = getLiveStatusContent(statusText);
+      try {
+        if (!liveStatusMsgId) {
+          const res = await webhook.send({ content, rawContent: true });
+          if (res.success && res.messageId) {
+            liveStatusMsgId = res.messageId;
+          }
+        } else {
+          const editRes = await webhook.edit(liveStatusMsgId, { content, rawContent: true });
+          if (!editRes.success) {
+            const res = await webhook.send({ content, rawContent: true });
+            if (res.success && res.messageId) {
+              liveStatusMsgId = res.messageId;
+            }
+          }
+        }
+      } catch {
+        // ignore transient network error
+      }
+    };
 
     ctx.log(`🎬 Running custom macro "${macro.name}" (${macro.steps.length} steps)...`, 'info');
 
@@ -641,8 +698,21 @@ export class MacroManager {
         currentStep: initialIndex + 1,
         cycleCount: loopCount,
         totalStepsExecuted,
-        nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now())
+        nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now()),
+        asCount,
+        acFixCount,
+        repairCount,
+        liveStatusMsgId
       });
+
+      // Post initial live status message & update every 1 min while start is working
+      await updateLiveStatus('working');
+      if (MacroManager.liveStatusInterval) {
+        clearInterval(MacroManager.liveStatusInterval);
+      }
+      MacroManager.liveStatusInterval = setInterval(() => {
+        updateLiveStatus('working').catch(() => {});
+      }, 60 * 1000);
     }
 
     let consecutiveRescuesOnStep = 0;
@@ -676,6 +746,7 @@ export class MacroManager {
           // Check if Repair modal is open before tapping RAB
           const repairHandled = await ScreenRuleManager.checkAndHandleRepairModal(adb, screenPng, ctx);
           if (repairHandled) {
+            repairCount++;
             const roundIndex = Math.min(3, Math.floor(i / 6));
             const roundBaseStepIdx = roundIndex * 6;
             const roundAsBtnStepIdx = roundBaseStepIdx + 2;
@@ -689,7 +760,11 @@ export class MacroManager {
             currentStep: stepNumber,
             cycleCount: loopCount,
             totalStepsExecuted,
-            nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now())
+            nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now()),
+            asCount,
+            acFixCount,
+            repairCount,
+            liveStatusMsgId
           });
         }
 
@@ -707,8 +782,13 @@ export class MacroManager {
               currentStep: stepNumber,
               cycleCount: loopCount,
               totalStepsExecuted,
-              nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now())
+              nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now()),
+              asCount,
+              acFixCount,
+              repairCount,
+              liveStatusMsgId
             });
+            await updateLiveStatus('stopped');
           }
           this.notifyCycleStopped();
           const stoppedMsg = pausedForUpdate
@@ -737,6 +817,7 @@ export class MacroManager {
             ? { ...manualReq!.ctx, args: ['--direct', '--during-start'] }
             : { ...ctx, args: ['--silent', '--direct', '--during-start'], reply: undefined };
           const fixacResult = await fixacCommand.execute(fixacCtx);
+          acFixCount++;
 
           if (manualReq) {
             manualReq.resolve(fixacResult);
@@ -754,8 +835,13 @@ export class MacroManager {
                 currentStep: stepNumber,
                 cycleCount: loopCount,
                 totalStepsExecuted,
-                nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now())
+                nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now()),
+                asCount,
+                acFixCount,
+                repairCount,
+                liveStatusMsgId
               });
+              await updateLiveStatus('stopped');
             }
             this.notifyCycleStopped();
             const stoppedMsg = pausedForUpdate
@@ -826,6 +912,9 @@ export class MacroManager {
 
           case 'loop': {
             loopCount++;
+            if (isStartMacro && asCount < loopCount * 4) {
+              asCount = loopCount * 4;
+            }
             // Right before Step 1 starts again: check if stop was requested!
             if (this.stopRequestedForRunId === runId || this.activeRunId !== runId) {
               const pausedForUpdate = this.stoppingForUpdate;
@@ -837,8 +926,13 @@ export class MacroManager {
                   currentStep: 1,
                   cycleCount: loopCount,
                   totalStepsExecuted,
-                  nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now())
+                  nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now()),
+                  asCount,
+                  acFixCount,
+                  repairCount,
+                  liveStatusMsgId
                 });
+                await updateLiveStatus('stopped');
               }
               this.notifyCycleStopped();
               const stoppedMsg = pausedForUpdate
@@ -854,7 +948,11 @@ export class MacroManager {
                 currentStep: 1,
                 cycleCount: loopCount,
                 totalStepsExecuted,
-                nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now())
+                nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now()),
+                asCount,
+                acFixCount,
+                repairCount,
+                liveStatusMsgId
               });
             }
             if (this.findRunning) {
@@ -917,6 +1015,9 @@ export class MacroManager {
                 tapY = match.targetPoint.y;
                 ctx.log(`✅ Visual Match (${targetName}): image is SAME (${(match.score * 100).toFixed(1)}% match in ${match.executionTimeMs}ms). Clicking inside image at (${tapX}, ${tapY})`, 'info');
                 await adb.tap(tapX, tapY);
+                if (isStartMacro && /as[1-4]\.png/i.test(step.refPath || '')) {
+                  asCount++;
+                }
                 if (!isLoopMacro) {
                   await updateProgress(`${macro.name}: step ${stepNumber} clicked ${targetName} (${(match.score * 100).toFixed(1)}%)`);
                 }
@@ -936,6 +1037,7 @@ export class MacroManager {
                 // 2. Check for Repair text modal (Area 1: 566-946, 1707-1801 -> Area 2: 605-997, 2177-2279)
                 const repairHandled = await ScreenRuleManager.checkAndHandleRepairModal(adb, screenPng, ctx);
                 if (repairHandled) {
+                  repairCount++;
                   // After repair, check which button of the loop is on screen and continue loop
                   const freshScreen = await adb.screencapRaw();
                   const roundIndex = Math.min(3, Math.floor(i / 6));
@@ -988,6 +1090,9 @@ export class MacroManager {
                     });
                     if (candMatch.found) {
                       await adb.tap(candMatch.targetPoint.x, candMatch.targetPoint.y);
+                      if (isStartMacro && /as[1-4]\.png/i.test(cand.refName || '')) {
+                        asCount++;
+                      }
                       i = cand.stepIdx;
                       recoveredAfterRepair = true;
                       break;
@@ -1095,6 +1200,9 @@ export class MacroManager {
                           'info'
                         );
                         await adb.tap(clickX, clickY);
+                        if (isStartMacro && /as[1-4]\.png/i.test(candName)) {
+                          asCount++;
+                        }
                       }
                       i = cand.stepIdx; // Loop will increment `i` to `cand.stepIdx + 1` (the wait step right after this button)
                       recovered = true;
@@ -1149,15 +1257,22 @@ export class MacroManager {
                     ctx.log(`Failed to process unknown screen: ${err.message}`, 'warn');
                   }
 
-                  this.saveStartState({
-                    isRunning: false,
-                    resumeAfterUpdate: false,
-                    autoFixacEnabled,
-                    currentStep: stepNumber,
-                    cycleCount: loopCount,
-                    totalStepsExecuted,
-                    nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now())
-                  });
+                  if (isStartMacro) {
+                    this.saveStartState({
+                      isRunning: false,
+                      resumeAfterUpdate: false,
+                      autoFixacEnabled,
+                      currentStep: stepNumber,
+                      cycleCount: loopCount,
+                      totalStepsExecuted,
+                      nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now()),
+                      asCount,
+                      acFixCount,
+                      repairCount,
+                      liveStatusMsgId
+                    });
+                    await updateLiveStatus('stopped');
+                  }
                   this.notifyCycleStopped();
                   this.stopRequestedForRunId = runId;
                   return { success: false, message: errorMsg, steps: stepsLog };
@@ -1210,8 +1325,13 @@ export class MacroManager {
                     currentStep: stepNumber,
                     cycleCount: loopCount,
                     totalStepsExecuted,
-                    nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now())
+                    nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now()),
+                    asCount,
+                    acFixCount,
+                    repairCount,
+                    liveStatusMsgId
                   });
+                  await updateLiveStatus('stopped');
                 }
                 this.notifyCycleStopped();
                 this.stopRequestedForRunId = runId;
@@ -1241,8 +1361,13 @@ export class MacroManager {
                   currentStep: stepNumber,
                   cycleCount: loopCount,
                   totalStepsExecuted,
-                  nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now())
+                  nextFixacRemainingMs: Math.max(0, nextFixacAt - Date.now()),
+                  asCount,
+                  acFixCount,
+                  repairCount,
+                  liveStatusMsgId
                 });
+                await updateLiveStatus('stopped');
               }
               this.notifyCycleStopped();
               this.stopRequestedForRunId = runId;
@@ -1301,6 +1426,9 @@ export class MacroManager {
           status: 'completed'
         });
       } catch (err: any) {
+        if (isStartMacro) {
+          await updateLiveStatus('stopped');
+        }
         if (this.runningMacroName === macro.name) {
           this.notifyCycleStopped();
         }
@@ -1323,6 +1451,9 @@ export class MacroManager {
     }
 
     if (this.runningMacroName === macro.name) {
+      if (isStartMacro) {
+        await updateLiveStatus('stopped');
+      }
       this.notifyCycleStopped();
     }
 

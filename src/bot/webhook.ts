@@ -5,6 +5,7 @@ export interface WebhookSendOptions {
   embeds?: any[];
   fileBuffer?: Buffer;
   fileName?: string;
+  rawContent?: boolean;
 }
 
 export class WebhookService {
@@ -74,7 +75,7 @@ export class WebhookService {
       return { success: false, error: 'Discord Webhook URL is not configured.' };
     }
 
-    const formattedContent = this.formatContent(options.content);
+    const formattedContent = options.rawContent ? (options.content || '') : this.formatContent(options.content);
     const targetUrl = this.buildWaitUrl();
 
     try {
@@ -147,7 +148,7 @@ export class WebhookService {
       return { success: false, error: 'Webhook URL or messageId is missing.' };
     }
 
-    const formattedContent = this.formatContent(options.content);
+    const formattedContent = options.rawContent ? (options.content || '') : this.formatContent(options.content);
     const editUrl = this.buildEditUrl(messageId);
 
     try {

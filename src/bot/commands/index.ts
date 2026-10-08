@@ -257,7 +257,7 @@ export const statusCommand: CommandDefinition = {
       ? `running \`sub ${runningSub}\``
       : runningMacro
       ? runningMacro.toLowerCase() === 'start'
-        ? `running \`start\` (step ${startState.currentStep}, cycle #${startState.cycleCount})`
+        ? `running \`start\` (step ${startState.currentStep}, cycle #${startState.cycleCount}, AS: ${startState.asCount || 0}, AC-Fix: ${startState.acFixCount || 0}, repair: ${startState.repairCount || 0})`
         : `running \`${runningMacro}\``
       : `idle (start cycles: ${startState.cycleCount}, last step: ${startState.currentStep})`;
 
