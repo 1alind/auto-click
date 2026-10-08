@@ -55,18 +55,14 @@ export const findCommand: CommandDefinition = {
 
       const { botManager } = await import('../botManager');
       const adb = botManager.getAdbController();
-      const webhook = botManager.getWebhookService();
+      const discord = botManager.getDiscordBot();
 
       const updateProgress = async (text: string) => {
-        if (!webhook.isConfigured()) return;
+        if (!discord.isConnected()) return;
         try {
-          if (!progressMsgId) {
-            const res = await webhook.send({ content: text });
-            if (res.success && res.messageId) {
-              progressMsgId = res.messageId;
-            }
-          } else {
-            await webhook.edit(progressMsgId, { content: text });
+          const res = await discord.updateDashboard({ content: text });
+          if (res.success && res.messageId) {
+            progressMsgId = res.messageId;
           }
         } catch {
           // ignore transient progress update errors
@@ -147,9 +143,9 @@ export const findCommand: CommandDefinition = {
 
         // Crop the search area directly from the raw screen buffer and send to Discord
         try {
-          if (webhook.isConfigured()) {
+          if (discord.isConnected()) {
             const croppedBuffer = await TemplateMatcher.cropRawToPng(rawScreen1, searchRegion);
-            await webhook.send({
+            await discord.updateDashboard({
               content: errorMsg,
               fileBuffer: croppedBuffer,
               fileName: `find_not_found_pfp.png`
@@ -235,29 +231,23 @@ export const findCommand: CommandDefinition = {
 
       const markdownContent = `-# **found** *(${(matchResult.score * 100).toFixed(0)}%)*`;
 
-      let webhookStatus = 'Webhook updated successfully';
-      if (webhook.isConfigured()) {
+      let webhookStatus = 'Discord Bot updated successfully';
+      if (discord.isConnected()) {
         const fileName = `cropped_${Date.now()}.png`;
-        const sendResult = progressMsgId
-          ? await webhook.edit(progressMsgId, {
-              content: markdownContent,
-              fileBuffer: croppedBuffer,
-              fileName
-            })
-          : await webhook.send({
-              content: markdownContent,
-              fileBuffer: croppedBuffer,
-              fileName
-            });
+        const sendResult = await discord.updateDashboard({
+          content: markdownContent,
+          fileBuffer: croppedBuffer,
+          fileName
+        });
 
         if (!sendResult.success) {
-          webhookStatus = `Webhook delivery warning: ${sendResult.error}`;
+          webhookStatus = `Discord delivery warning: ${sendResult.error}`;
           ctx.log(webhookStatus, 'warn');
         } else {
-          ctx.log('✅ Webhook message updated with 150x150 image on Discord!', 'info');
+          ctx.log('✅ Discord message updated with 150x150 image on Discord!', 'info');
         }
       } else {
-        webhookStatus = 'Webhook URL not set (configured in dashboard or .env)';
+        webhookStatus = 'Discord Bot not connected';
         ctx.log(`⚠️ ${webhookStatus}. Image captured and preserved in memory.`, 'warn');
       }
 

@@ -1,11 +1,19 @@
-import { Client, GatewayIntentBits, Events, Message } from 'discord.js';
+import { Client, GatewayIntentBits, Events, Message, AttachmentBuilder } from 'discord.js';
 import { CommandContext, CommandDefinition, CommandResult } from './types';
 import { ConsoleLogger } from './consoleLogger';
+import { StoragePaths } from './storagePaths';
+import { createControlButtons } from './discordButtons';
+import fs from 'fs';
+import path from 'path';
 
 export class DiscordBotClient {
   private client: Client | null = null;
   private token: string = '';
   private prefix: string = '!';
+  private targetChannelId: string = '1553844985776836638';
+  private dashboardMessageId: string | null = null;
+  private lastMediaMessageId: string | null = null;
+  private mediaDeleteTimer: NodeJS.Timeout | null = null;
   private isConnecting = false;
   private shouldStayConnected = false;
   private retryTimer: NodeJS.Timeout | null = null;
@@ -17,10 +25,12 @@ export class DiscordBotClient {
   constructor(options?: {
     token?: string;
     prefix?: string;
+    targetChannelId?: string;
     onLog?: (msg: string, level: string, meta?: any) => void;
   }) {
     if (options?.token) this.token = options.token;
     if (options?.prefix) this.prefix = options.prefix;
+    if (options?.targetChannelId) this.targetChannelId = options.targetChannelId;
     if (options?.onLog) this.onLogCallback = options.onLog;
   }
 
@@ -42,6 +52,232 @@ export class DiscordBotClient {
 
   public getClient(): Client | null {
     return this.client;
+  }
+
+  public getTargetChannelId(): string {
+    return this.targetChannelId;
+  }
+
+  public setTargetChannelId(id: string): void {
+    if (id) this.targetChannelId = id.trim();
+  }
+
+  public getDashboardMessageId(): string | null {
+    if (!this.dashboardMessageId) {
+      this.dashboardMessageId = this.loadDashboardMessageId();
+    }
+    return this.dashboardMessageId;
+  }
+
+  private loadDashboardMessageId(): string | null {
+    try {
+      const p = StoragePaths.getDashboardMessagePath();
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed?.messageId) return parsed.messageId;
+      }
+    } catch {}
+    return null;
+  }
+
+  public saveDashboardMessageId(id: string | null): void {
+    this.dashboardMessageId = id;
+    try {
+      const p = StoragePaths.getDashboardMessagePath();
+      const dir = path.dirname(p);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        p,
+        JSON.stringify({ messageId: id, updatedAt: new Date().toISOString() }, null, 2),
+        'utf-8'
+      );
+    } catch {}
+  }
+
+  public formatContent(raw?: string): string {
+    if (!raw) return '';
+    return raw
+      .split('\n')
+      .map((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return '';
+        return trimmed.startsWith('-#') ? trimmed : `-# ${trimmed}`;
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  public async clearTemporaryMedia(): Promise<void> {
+    if (this.mediaDeleteTimer) {
+      clearTimeout(this.mediaDeleteTimer);
+      this.mediaDeleteTimer = null;
+    }
+    if (this.lastMediaMessageId && this.client && this.client.isReady()) {
+      const id = this.lastMediaMessageId;
+      this.lastMediaMessageId = null;
+      try {
+        const channel = await this.client.channels.fetch(this.targetChannelId).catch(() => null);
+        if (channel && channel.isTextBased()) {
+          const msg = await (channel as any).messages.fetch(id).catch(() => null);
+          if (msg) await msg.delete().catch(() => {});
+        }
+      } catch {}
+    }
+  }
+
+  public async resolveTargetChannel(): Promise<any> {
+    if (!this.client || !this.client.isReady()) return null;
+
+    if (this.targetChannelId) {
+      const ch = await this.client.channels.fetch(this.targetChannelId).catch(() => null);
+      if (ch && ch.isTextBased()) return ch;
+    }
+
+    // Auto-discover first available text channel in bot's guilds
+    for (const guild of this.client.guilds.cache.values()) {
+      const textCh = guild.channels.cache.find(
+        (c) =>
+          c.isTextBased() &&
+          (c as any).viewable &&
+          (c as any).permissionsFor?.(this.client!.user!)?.has(['ViewChannel', 'SendMessages'])
+      );
+      if (textCh) {
+        this.targetChannelId = textCh.id;
+        this.log(`📍 Auto-selected Discord channel #${(textCh as any).name} (${textCh.id})`, 'info');
+        return textCh;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Updates the single persistent dashboard message in the channel directly using the Discord bot.
+   * Attaches control buttons and keeps button states synchronized with bot run state.
+   */
+  public async updateDashboard(options: {
+    content?: string;
+    rawContent?: boolean;
+    components?: any[];
+    fileBuffer?: Buffer;
+    fileName?: string;
+    forceNewMessage?: boolean;
+    isRunning?: boolean;
+  }): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    if (!this.client || !this.client.isReady()) {
+      return { success: false, error: 'Discord Bot is not connected' };
+    }
+
+    try {
+      const textChannel = await this.resolveTargetChannel();
+      if (!textChannel) {
+        this.log(`⚠️ Target Discord channel ${this.targetChannelId} not found or not accessible`, 'warn');
+        return { success: false, error: 'Target channel not accessible' };
+      }
+
+      // Handle Screenshot / Image Attachment (Option 3: auto-cleans after 90s, keeps dashboard clean)
+      if (options.fileBuffer) {
+        await this.clearTemporaryMedia().catch(() => {});
+        const fileName = options.fileName || `screenshot_${Date.now()}.png`;
+        const attachment = new AttachmentBuilder(options.fileBuffer, { name: fileName });
+        const formattedContent = options.rawContent ? (options.content || '') : this.formatContent(options.content);
+
+        const sent = await textChannel.send({
+          content: formattedContent || undefined,
+          files: [attachment]
+        });
+
+        if (sent?.id) {
+          this.lastMediaMessageId = sent.id;
+          if (this.mediaDeleteTimer) clearTimeout(this.mediaDeleteTimer);
+          this.mediaDeleteTimer = setTimeout(async () => {
+            await this.clearTemporaryMedia().catch(() => {});
+          }, 90 * 1000);
+        }
+
+        // Also update the persistent single dashboard message with the latest capture alert & buttons
+        void this.updateDashboard({
+          content: `-# 📸 screenshot captured (${fileName})\n-# (screenshot clears automatically to keep channel clean)`,
+          rawContent: true,
+          isRunning: options.isRunning
+        }).catch(() => {});
+
+        return { success: true, messageId: sent?.id };
+      }
+
+      // Handle Text / Live Status / Dashboard with Buttons
+      let isRunning = options.isRunning;
+      if (isRunning === undefined) {
+        try {
+          const { MacroManager } = await import('./macroManager');
+          isRunning = Boolean(MacroManager.getRunningMacro());
+        } catch {
+          isRunning = false;
+        }
+      }
+
+      let formattedContent: string | undefined;
+      if (options.content !== undefined) {
+        formattedContent = options.rawContent ? options.content : this.formatContent(options.content);
+      }
+
+      const row = createControlButtons(isRunning);
+      const defaultContent = isRunning ? '-# airstrike working' : '-# 🟢 bot online';
+      const contentToSend = formattedContent !== undefined ? formattedContent : defaultContent;
+
+      let currentDashboardId = this.getDashboardMessageId();
+      let existingMsg: any = null;
+
+      if (currentDashboardId && !options.forceNewMessage) {
+        existingMsg = await textChannel.messages.fetch(currentDashboardId).catch(() => null);
+      }
+
+      // If existing msg ID wasn't found or was deleted, scan the channel to find any existing bot message
+      if (!existingMsg && !options.forceNewMessage && this.client?.user) {
+        try {
+          const recent = await textChannel.messages.fetch({ limit: 20 }).catch(() => null);
+          if (recent) {
+            const botMsgs = recent.filter((m: any) => m.author.id === this.client!.user!.id);
+            if (botMsgs.size > 0) {
+              existingMsg = botMsgs.first();
+              this.saveDashboardMessageId(existingMsg.id);
+
+              // Delete any older duplicate bot messages to guarantee exactly ONE message in channel
+              const extras = botMsgs.filter((m: any) => m.id !== existingMsg.id);
+              for (const extra of extras.values()) {
+                await extra.delete().catch(() => {});
+              }
+            }
+          }
+        } catch {}
+      }
+
+      if (existingMsg) {
+        try {
+          const edited = await existingMsg.edit({
+            content: contentToSend,
+            components: [row]
+          });
+          this.saveDashboardMessageId(edited.id);
+          return { success: true, messageId: edited.id };
+        } catch (editErr: any) {
+          this.log(`Existing dashboard message (${existingMsg.id}) not editable (${editErr.message}), recreating`, 'info');
+          await existingMsg.delete().catch(() => {});
+          this.saveDashboardMessageId(null);
+        }
+      }
+
+      const newMsg = await textChannel.send({
+        content: contentToSend,
+        components: [row]
+      });
+      this.saveDashboardMessageId(newMsg.id);
+      return { success: true, messageId: newMsg.id };
+    } catch (err: any) {
+      this.log(`Error updating dashboard message: ${err.message}`, 'error', err);
+      return { success: false, error: err.message };
+    }
   }
 
   public async sendToChannel(
@@ -191,14 +427,15 @@ export class DiscordBotClient {
     if (!this.client) return;
 
     this.client.on(Events.ClientReady, async () => {
-      this.log(`🤖 Discord Client is ready! Monitoring commands with prefix "${this.prefix}"`, 'info');
+      await this.resolveTargetChannel().catch(() => {});
+      this.log(`🤖 Discord Client is ready! Monitoring channel ${this.targetChannelId} with prefix "${this.prefix}"`, 'info');
       try {
-        const { botManager } = await import('./botManager');
-        const webhook = botManager.getWebhookService();
-        if (webhook.isConfigured()) {
-          await webhook.send({ content: 'ready' }).catch(() => {});
-        }
         const { MacroManager } = await import('./macroManager');
+        const isRunning = Boolean(MacroManager.getRunningMacro());
+        await this.updateDashboard({
+          content: isRunning ? '-# airstrike working' : '-# 🟢 bot online',
+          isRunning
+        }).catch(() => {});
         await MacroManager.resumeStartIfNeeded();
       } catch {
         // ignore ready notification error
@@ -209,8 +446,10 @@ export class DiscordBotClient {
       // Ignore bot messages
       if (message.author.bot) return;
 
-      // Only receive commands from channel 1553844985776836638
-      if (message.channelId !== '1553844985776836638') return;
+      // Update targetChannelId to active channel so bot stays synchronized
+      if (message.channel.isTextBased()) {
+        this.targetChannelId = message.channelId;
+      }
 
       const raw = message.content.trim();
       if (!raw) return;
@@ -248,17 +487,9 @@ export class DiscordBotClient {
         discordMessage: message,
         reply: async (replyText: string) => {
           try {
-            const { botManager } = await import('./botManager');
-            const webhook = botManager.getWebhookService();
-            if (webhook.isConfigured()) {
-              await webhook.send({
-                content: replyText
-              });
-            } else {
-              this.log(`⚠️ Discord Webhook not configured; message dropped (bot never sends directly): "${replyText}"`, 'warn');
-            }
+            await this.updateDashboard({ content: replyText });
           } catch (e: any) {
-            this.log(`Failed to send webhook message: ${e.message}`, 'warn');
+            this.log(`Failed to update dashboard message: ${e.message}`, 'warn');
           }
         },
         log: (msg: string, level = 'info', meta?: any) => {
@@ -280,13 +511,7 @@ export class DiscordBotClient {
         ConsoleLogger.error(err, `command ${commandKey}`);
         this.log(`Error executing command ${commandKey}: ${err.message}`, 'error', err);
         try {
-          const { botManager } = await import('./botManager');
-          const webhook = botManager.getWebhookService();
-          if (webhook.isConfigured()) {
-            await webhook.send({
-              content: `error: ${err.message}`
-            });
-          }
+          await this.updateDashboard({ content: `error: ${err.message}` });
         } catch {
           // ignore
         }
@@ -296,8 +521,9 @@ export class DiscordBotClient {
     this.client.on(Events.InteractionCreate, async (interaction) => {
       if (!interaction.isButton()) return;
 
-      // Allow configured channel or DMs
-      if (interaction.channelId && interaction.channelId !== '1553844985776836638') return;
+      if (interaction.channelId) {
+        this.targetChannelId = interaction.channelId;
+      }
 
       const customId = interaction.customId;
       this.log(`🔘 Button clicked: "${customId}" by ${interaction.user.tag}`, 'info');
@@ -306,11 +532,7 @@ export class DiscordBotClient {
       await interaction.deferUpdate().catch(() => {});
 
       // Clear any temporary screenshot so the channel cleanly returns to 1 message
-      try {
-        const { botManager } = await import('./botManager');
-        const webhook = botManager.getWebhookService();
-        await webhook.clearTemporaryMedia().catch(() => {});
-      } catch {}
+      await this.clearTemporaryMedia().catch(() => {});
 
       let commandName = '';
       let args: string[] = [];
@@ -321,6 +543,10 @@ export class DiscordBotClient {
           break;
         case 'btn_start':
           commandName = 'start';
+          break;
+        case 'btn_hold':
+          commandName = 'hold';
+          args = [];
           break;
         case 'btn_fixac':
           commandName = 'fixac';
@@ -363,13 +589,7 @@ export class DiscordBotClient {
         channelId: interaction.channelId,
         reply: async (replyText: string) => {
           try {
-            const { botManager } = await import('./botManager');
-            const webhook = botManager.getWebhookService();
-            if (webhook.isConfigured()) {
-              await webhook.send({ content: replyText });
-            } else if (interaction.channel && 'send' in interaction.channel) {
-              await (interaction.channel as any).send(replyText);
-            }
+            await this.updateDashboard({ content: replyText });
           } catch (e: any) {
             this.log(`Failed to reply to button action: ${e.message}`, 'warn');
           }

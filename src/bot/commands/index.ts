@@ -88,15 +88,16 @@ export const holdCommand: CommandDefinition = {
     const { botManager } = await import('../botManager');
     const adb = botManager.getAdbController();
 
-    if (ctx.args.length < 2) {
-      const msg = 'usage: hold <x> <y> [durationMs/seconds] (e.g. hold 500 1000 2s)';
-      if (ctx.reply) await ctx.reply(msg);
-      return { success: false, message: msg };
-    }
+    let argX = ctx.args[0];
+    let argY = ctx.args[1];
+    let durArg = ctx.args[2];
 
-    const argX = ctx.args[0];
-    const argY = ctx.args[1];
-    const durArg = ctx.args[2];
+    if (!argX || !argY) {
+      // Default to screen center (540, 1170) when triggered by Discord button or without arguments
+      argX = '540';
+      argY = '1170';
+      durArg = durArg || '1000';
+    }
     let durationMs = 1000;
 
     if (durArg) {
@@ -280,13 +281,14 @@ export const screenshotCommand: CommandDefinition = {
       labelText = `**saved** \`${savedFileName}\``;
     }
 
-    if (webhook.isConfigured()) {
-      await webhook.send({
+    const discord = botManager.getDiscordBot();
+    if (discord.isConnected()) {
+      await discord.updateDashboard({
         content: labelText,
         fileBuffer: finalBuffer,
         fileName: savedFileName
       });
-      ctx.log('✅ Screenshot sent to Discord Webhook', 'info');
+      ctx.log('✅ Screenshot sent via Discord Bot', 'info');
     } else if (shouldSave && ctx.reply) {
       await ctx.reply(labelText);
     }
@@ -387,14 +389,12 @@ export const buttonsCommand: CommandDefinition = {
       ? '-# 🎮 **Control Panel** (airstrike: `working`)\n-# Tap a button below to control the bot:'
       : '-# 🎮 **Control Panel** (airstrike: `idle`)\n-# Tap a button below to control the bot:';
 
-    const row = createControlButtons(isRunning);
-    const webhook = botManager.getWebhookService();
-
-    if (webhook.isConfigured()) {
-      await webhook.send({
+    const discord = botManager.getDiscordBot();
+    if (discord.isConnected()) {
+      await discord.updateDashboard({
         content,
         rawContent: true,
-        components: [row.toJSON()]
+        isRunning
       });
     }
 

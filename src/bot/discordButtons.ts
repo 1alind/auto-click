@@ -11,19 +11,24 @@ export function createControlButtons(isRunning: boolean = false): ActionRowBuild
         .setEmoji('⏹️')
         .setStyle(ButtonStyle.Danger),
       new ButtonBuilder()
+        .setCustomId('btn_hold')
+        .setLabel('Hold')
+        .setEmoji('⏱️')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
         .setCustomId('btn_fixac')
         .setLabel('Fixac')
         .setEmoji('🔧')
-        .setStyle(ButtonStyle.Primary),
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('btn_screenshot')
+        .setLabel('Screen')
+        .setEmoji('📸')
+        .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId('btn_status')
         .setLabel('Status')
         .setEmoji('📊')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('btn_screenshot')
-        .setLabel('Screenshot')
-        .setEmoji('📸')
         .setStyle(ButtonStyle.Secondary)
     );
   } else {
@@ -34,19 +39,24 @@ export function createControlButtons(isRunning: boolean = false): ActionRowBuild
         .setEmoji('▶️')
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
+        .setCustomId('btn_hold')
+        .setLabel('Hold')
+        .setEmoji('⏱️')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
         .setCustomId('btn_fixac')
         .setLabel('Fixac')
         .setEmoji('🔧')
-        .setStyle(ButtonStyle.Primary),
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('btn_screenshot')
+        .setLabel('Screen')
+        .setEmoji('📸')
+        .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId('btn_status')
         .setLabel('Status')
         .setEmoji('📊')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('btn_screenshot')
-        .setLabel('Screenshot')
-        .setEmoji('📸')
         .setStyle(ButtonStyle.Secondary)
     );
   }

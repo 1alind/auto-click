@@ -36,7 +36,7 @@ export class WebhookService {
   }
 
   public isConfigured(): boolean {
-    return Boolean(this.webhookUrl && this.webhookUrl.startsWith('https://discord.com/api/webhooks/'));
+    return true;
   }
 
   public getDashboardMessageId(): string | null {
@@ -76,6 +76,22 @@ export class WebhookService {
    * Deletes a message created by the webhook using DELETE /messages/{messageId}.
    */
   public async deleteMessage(messageId: string): Promise<boolean> {
+    try {
+      const { botManager } = await import('./botManager');
+      const discordBot = botManager.getDiscordBot();
+      if (discordBot.isConnected()) {
+        const client = discordBot.getClient();
+        if (client && client.isReady()) {
+          const ch = await client.channels.fetch(discordBot.getTargetChannelId()).catch(() => null);
+          if (ch && ch.isTextBased()) {
+            const m = await (ch as any).messages.fetch(messageId).catch(() => null);
+            if (m) await m.delete().catch(() => {});
+            return true;
+          }
+        }
+      }
+    } catch {}
+
     if (!this.webhookUrl || !messageId) return false;
     const delUrl = this.buildEditUrl(messageId);
     try {
@@ -90,6 +106,15 @@ export class WebhookService {
    * Clears any active temporary screenshot message (Option 3: auto-cleanup).
    */
   public async clearTemporaryMedia(): Promise<void> {
+    try {
+      const { botManager } = await import('./botManager');
+      const discordBot = botManager.getDiscordBot();
+      if (discordBot.isConnected()) {
+        await discordBot.clearTemporaryMedia().catch(() => {});
+        return;
+      }
+    } catch {}
+
     if (this.mediaDeleteTimer) {
       clearTimeout(this.mediaDeleteTimer);
       this.mediaDeleteTimer = null;
@@ -138,14 +163,22 @@ export class WebhookService {
 
   /**
    * Sends or updates a Discord message.
-   * - If text-only (no fileBuffer): Always edits the single dashboard message in place with buttons attached!
-   * - If fileBuffer (Screenshot/Image): Sends the image and auto-deletes it after 90 seconds (Option 3).
+   * Priority: Directly uses the connected Discord Bot (no webhook needed).
    */
   public async send(
     options: WebhookSendOptions
   ): Promise<{ success: boolean; status?: number; messageId?: string; error?: string }> {
+    try {
+      const { botManager } = await import('./botManager');
+      const discordBot = botManager.getDiscordBot();
+      if (discordBot.isConnected()) {
+        const res = await discordBot.updateDashboard(options);
+        return { success: res.success, messageId: res.messageId, error: res.error };
+      }
+    } catch {}
+
     if (!this.webhookUrl) {
-      return { success: false, error: 'Discord Webhook URL is not configured.' };
+      return { success: false, error: 'Discord Bot is not connected and Webhook URL is not configured.' };
     }
 
     // Handle Screenshot/Image Attachment (Option 3)
@@ -288,6 +321,15 @@ export class WebhookService {
     messageId: string,
     options: WebhookSendOptions
   ): Promise<{ success: boolean; status?: number; error?: string }> {
+    try {
+      const { botManager } = await import('./botManager');
+      const discordBot = botManager.getDiscordBot();
+      if (discordBot.isConnected()) {
+        const res = await discordBot.updateDashboard(options);
+        return { success: res.success, error: res.error };
+      }
+    } catch {}
+
     if (!this.webhookUrl || !messageId) {
       return { success: false, error: 'Webhook URL or messageId is missing.' };
     }

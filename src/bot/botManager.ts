@@ -65,6 +65,7 @@ export class BotManager {
     this.discord = new DiscordBotClient({
       token: this.config.discordToken,
       prefix: this.config.prefix,
+      targetChannelId: this.config.targetChannelId,
       onLog: (msg, level, data) => this.addLog(msg, level as any, data)
     });
 
@@ -210,6 +211,9 @@ export class BotManager {
     if (newConfig.adbHost !== undefined) this.adb.setHost(newConfig.adbHost);
     if (newConfig.githubToken !== undefined) this.autoUpdater.setGitHubToken(newConfig.githubToken);
     if (newConfig.githubRepo !== undefined) this.autoUpdater.setGitHubRepo(newConfig.githubRepo);
+    if (newConfig.targetChannelId !== undefined) {
+      this.discord.setTargetChannelId(newConfig.targetChannelId);
+    }
     if (newConfig.webhookUrl !== undefined) {
       this.webhook.setWebhookUrl(newConfig.webhookUrl);
       this.autoUpdater.setWebhookService(this.webhook);
@@ -311,6 +315,7 @@ export class BotManager {
   private loadConfig(): BotConfig {
     const defaults: BotConfig = {
       discordToken: process.env.DISCORD_BOT_TOKEN || '',
+      targetChannelId: process.env.DISCORD_CHANNEL_ID || '1553844985776836638',
       webhookUrl: process.env.DISCORD_WEBHOOK_URL || '',
       prefix: '',
       adbSerial: '',

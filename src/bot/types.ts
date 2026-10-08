@@ -1,5 +1,6 @@
 export interface BotConfig {
   discordToken: string;
+  targetChannelId?: string;
   webhookUrl: string;
   prefix: string;
   adbSerial: string;

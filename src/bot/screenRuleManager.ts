@@ -588,7 +588,17 @@ export class ScreenRuleManager {
 
     ctx.log(`Target not found in ${contextInfo.macroName} step ${contextInfo.stepNumber} (${contextInfo.targetName}). Sending screenshot to Discord...`, 'warn');
 
-    if (webhook.isConfigured()) {
+    const { botManager } = await import('./botManager');
+    const discord = botManager.getDiscordBot();
+    if (discord.isConnected()) {
+      await discord.updateDashboard({
+        content: msg,
+        fileBuffer: screenshot,
+        fileName: `screen_${Date.now()}.png`
+      }).catch((err) => {
+        ctx.log(`Failed to upload screenshot to Discord: ${err.message}`, 'error');
+      });
+    } else if (webhook && webhook.isConfigured()) {
       await webhook.send({
         content: msg,
         fileBuffer: screenshot,

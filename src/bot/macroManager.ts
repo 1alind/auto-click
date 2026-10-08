@@ -294,13 +294,14 @@ export class MacroManager {
     if (!startMacro) return;
 
     const { botManager } = await import('./botManager');
-    const webhook = botManager.getWebhookService();
+    const discord = botManager.getDiscordBot();
 
     const resumeStep = state.currentStep || 1;
-    if (webhook.isConfigured()) {
-      await webhook
-        .send({
-          content: `🔄 Update complete — resuming \`${startMacro.name}\` from **step ${resumeStep}** (cycle #${state.cycleCount}, total steps: ${state.totalStepsExecuted})...`
+    if (discord.isConnected()) {
+      await discord
+        .updateDashboard({
+          content: `🔄 Update complete — resuming \`${startMacro.name}\` from **step ${resumeStep}** (cycle #${state.cycleCount}, total steps: ${state.totalStepsExecuted})...`,
+          isRunning: true
         })
         .catch(() => {});
     }
@@ -309,10 +310,10 @@ export class MacroManager {
       commandName: startMacro.name,
       args: state.autoFixacEnabled ? ['fixac'] : [],
       author: { id: 'system', tag: 'auto-resume', username: 'auto-resume' },
-      channelId: '1553844985776836638',
+      channelId: discord.getTargetChannelId() || '1553844985776836638',
       reply: async (msg: string) => {
-        if (webhook.isConfigured()) {
-          await webhook.send({ content: msg }).catch(() => {});
+        if (discord.isConnected()) {
+          await discord.updateDashboard({ content: msg }).catch(() => {});
         }
       },
       log: (msg: string, level = 'info', meta?: any) => {
@@ -334,7 +335,7 @@ export class MacroManager {
     return targetName;
   }
 
-  private static notifyCycleStopped(): void {
+  private static async notifyCycleStopped(): Promise<void> {
     if (this.liveStatusInterval) {
       clearInterval(this.liveStatusInterval);
       this.liveStatusInterval = null;
@@ -343,6 +344,29 @@ export class MacroManager {
     const waiters = [...this.cycleStopWaiters];
     this.cycleStopWaiters = [];
     for (const resolve of waiters) resolve();
+
+    try {
+      const { botManager } = await import('./botManager');
+      const discord = botManager.getDiscordBot();
+      if (discord.isConnected()) {
+        const persisted = this.loadStartState();
+        const content = [
+          '-# airstrike stopped',
+          `-# AS count: ${persisted.asCount || 0}`,
+          `-# AC-Fix count: ${persisted.acFixCount || 0}`,
+          `-# repair-count: ${persisted.repairCount || 0}`
+        ].join('\n');
+        await discord.updateDashboard({
+          content,
+          rawContent: true,
+          isRunning: false
+        }).catch(() => {});
+      }
+    } catch {}
+  }
+
+  public static isAnyRunning(): boolean {
+    return Boolean(this.runningMacroName);
   }
 
   public static getRunningMacro(): string | null {
@@ -636,7 +660,7 @@ export class MacroManager {
   ): Promise<CommandResult> {
     const { botManager } = await import('./botManager');
     const adb = botManager.getAdbController();
-    const webhook = botManager.getWebhookService();
+    const discord = botManager.getDiscordBot();
     const stepsLog: StepLog[] = [];
 
     // Wait if `find` is currently working
@@ -682,16 +706,20 @@ export class MacroManager {
     };
 
     const updateLiveStatus = async (statusText: string = 'working') => {
-      if (!webhook.isConfigured()) return;
       const content = getLiveStatusContent(statusText);
-      const components = createControlButtonsJson(statusText === 'working');
-      try {
-        const res = await webhook.send({ content, rawContent: true, components });
-        if (res.success && res.messageId) {
-          liveStatusMsgId = res.messageId;
+      if (discord.isConnected()) {
+        try {
+          const res = await discord.updateDashboard({
+            content,
+            rawContent: true,
+            isRunning: statusText === 'working'
+          });
+          if (res.success && res.messageId) {
+            liveStatusMsgId = res.messageId;
+          }
+        } catch {
+          // ignore transient network error
         }
-      } catch {
-        // ignore transient network error
       }
     };
 
@@ -702,11 +730,12 @@ export class MacroManager {
     let progressMsgId: string | undefined;
 
     const updateProgress = async (text: string) => {
-      if (!webhook.isConfigured()) return;
-      try {
-        await webhook.send({ content: text });
-      } catch {
-        // ignore transient webhook progress errors
+      if (discord.isConnected()) {
+        try {
+          await discord.updateDashboard({ content: text });
+        } catch {
+          // ignore transient discord progress errors
+        }
       }
     };
 
@@ -1468,21 +1497,13 @@ export class MacroManager {
             const h = step.cropH || 150;
             const cropped = await TemplateMatcher.cropRawCenterToPng(rawScreen, w, h);
 
-            if (webhook.isConfigured()) {
+            if (discord.isConnected()) {
               const fileName = `crop_${Date.now()}.png`;
-              if (progressMsgId) {
-                await webhook.edit(progressMsgId, {
-                  content: `**${macro.name}** *(${w}×${h})*`,
-                  fileBuffer: cropped,
-                  fileName
-                });
-              } else {
-                await webhook.send({
-                  content: `**${macro.name}** *(${w}×${h})*`,
-                  fileBuffer: cropped,
-                  fileName
-                });
-              }
+              await discord.updateDashboard({
+                content: `**${macro.name}** *(${w}×${h})*`,
+                fileBuffer: cropped,
+                fileName
+              });
               sentCropImage = true;
             }
             break;
