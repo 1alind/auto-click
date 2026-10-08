@@ -771,6 +771,8 @@ export class DiscordBotClient {
 
         const msg = reaction.message;
         const msgId = msg.id;
+        
+        this.log(`Reaction detected on message ${msgId}. Author ID: ${msg.author?.id}, Bot ID: ${this.client?.user?.id}`, 'info');
 
         // If any message sent by the bot receives a reaction, delete it (EXCEPT the main dashboard message)
         if (msg.author?.id === this.client?.user?.id) {
