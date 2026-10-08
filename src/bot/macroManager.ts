@@ -945,6 +945,11 @@ export class MacroManager {
 
                   const repairCandidates = [
                     {
+                      stepIdx: roundAsBtnStepIdx,
+                      refName: 'asbtn.png',
+                      region: { minX: 771, maxX: 840, minY: 1107, maxY: 1176 }
+                    },
+                    {
                       stepIdx: roundAsNumStepIdx,
                       refName: macro.steps[roundAsNumStepIdx]?.refPath || `as${roundIndex + 1}.png`,
                       region: {
@@ -953,13 +958,24 @@ export class MacroManager {
                         minY: macro.steps[roundAsNumStepIdx]?.minY ?? 1622,
                         maxY: macro.steps[roundAsNumStepIdx]?.maxY ?? 1707
                       }
-                    },
-                    {
-                      stepIdx: roundAsBtnStepIdx,
-                      refName: 'asbtn.png',
-                      region: { minX: 771, maxX: 840, minY: 1107, maxY: 1176 }
                     }
                   ];
+
+                  // Also check any other round's formation button in case loop desynced
+                  for (let r = 0; r < 4; r++) {
+                    if (r === roundIndex) continue;
+                    const rNumStep = r * 6 + 4;
+                    repairCandidates.push({
+                      stepIdx: rNumStep,
+                      refName: macro.steps[rNumStep]?.refPath || `as${r + 1}.png`,
+                      region: {
+                        minX: macro.steps[rNumStep]?.minX ?? 230,
+                        maxX: macro.steps[rNumStep]?.maxX ?? 625,
+                        minY: macro.steps[rNumStep]?.minY ?? 1622,
+                        maxY: macro.steps[rNumStep]?.maxY ?? 1707
+                      }
+                    });
+                  }
 
                   let recoveredAfterRepair = false;
                   for (const cand of repairCandidates) {

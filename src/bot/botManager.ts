@@ -143,7 +143,7 @@ export class BotManager {
       }
     }).catch(() => {});
 
-    // Automatically scan 127.0.0.1:30000-40000 with nmap and connect on script startup without waiting for `connect` command
+    // On startup: if an ADB device is already connected, adopt its serial
     setTimeout(async () => {
       try {
         const avail = await this.adb.isAdbAvailable();
@@ -153,15 +153,12 @@ export class BotManager {
         if (onlineLocal) {
           this.adb.setSerial(onlineLocal.serial);
           this.adb.setHost(onlineLocal.serial);
-          this.adb.startWifiDebuggingWatcher();
           if (this.webhook.isConfigured()) {
             await this.webhook.send({ content: `connected to ${onlineLocal.serial}` }).catch(() => {});
           }
-        } else {
-          this.adb.startBackgroundAutoConnect();
         }
       } catch {
-        // ignore startup scan error
+        // ignore startup check error
       }
     }, 1500);
   }

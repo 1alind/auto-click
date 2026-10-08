@@ -55,171 +55,80 @@ export class AdbController {
   }
 
   /**
-   * Automatically turns Android Wireless Debugging and ADB TCP/IP back ON
-   * whenever Wi-Fi disconnects/reconnects or wireless debugging is toggled off.
-   */
-  public async ensureWirelessDebuggingEnabled(): Promise<boolean> {
-    // 1. Over active ADB session if available: lock to port 5555
-    try {
-      if (this.serial) {
-        await execPromise(`adb -s ${this.serial} shell "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1"`);
-        await execPromise(`adb -s ${this.serial} tcpip 5555`);
-      } else {
-        await execPromise('adb shell "settings put global adb_wifi_enabled 1; settings put global adb_enabled 1"');
-        await execPromise('adb tcpip 5555');
-      }
-      return true;
-    } catch {}
-
-    // 2. Launch Developer Settings intent to easily toggle Wireless Debugging
-    try {
-      await execPromise('am start -a android.settings.APPLICATION_DEVELOPMENT_SETTINGS || am start -a android.settings.WIFI_DEBUGGING_SETTINGS');
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Executes the auto-enable logic when no open ADB port is found.
-   */
-  public async runWifiDebugTriggerScript(): Promise<boolean> {
-    return await this.ensureWirelessDebuggingEnabled().catch(() => false);
-  }
-
-  /**
    * Uses nmap and mDNS to scan 127.0.0.1 ports 5555 and 30000-50000 for open Wireless Debugging ports and connects automatically.
-   * If nothing is found on pass 1, it executes enable_wifi_debug.sh and re-scans!
    */
   public async scanWithNmapAndConnect(): Promise<string> {
-    const doScanPass = async (): Promise<string> => {
+    try {
+      await execPromise('adb start-server').catch(() => {});
+
+      // Check standard port 5555 first
+      const quickTargets = ['127.0.0.1:5555', 'localhost:5555'];
+      for (const qt of quickTargets) {
+        const { stdout: qOut } = await execPromise(`adb connect ${qt}`).catch(() => ({ stdout: '' }));
+        if (String(qOut).toLowerCase().includes('connected to')) {
+          const devs = await this.getDevices();
+          if (devs.some((d) => d.serial === qt && d.state === 'device')) {
+            this.serial = qt;
+            this.host = qt;
+            return qt;
+          }
+        }
+      }
+
+      // Check mDNS services if available on Android 11+
       try {
-        await execPromise('adb start-server').catch(() => {});
-
-        // Check standard port 5555 first
-        const quickTargets = ['127.0.0.1:5555', 'localhost:5555'];
-        for (const qt of quickTargets) {
-          const { stdout: qOut } = await execPromise(`adb connect ${qt}`).catch(() => ({ stdout: '' }));
-          if (String(qOut).toLowerCase().includes('connected to')) {
+        const { stdout: mdnsOut } = await execPromise('adb mdns services').catch(() => ({ stdout: '' }));
+        const mdnsMatches = mdnsOut.match(/127\.0\.0\.1:(\d{4,5})|localhost:(\d{4,5})/gi) || [];
+        for (const matchTarget of mdnsMatches) {
+          const { stdout: connOut } = await execPromise(`adb connect ${matchTarget}`).catch(() => ({ stdout: '' }));
+          if (String(connOut).toLowerCase().includes('connected to')) {
             const devs = await this.getDevices();
-            if (devs.some((d) => d.serial === qt && d.state === 'device')) {
-              this.serial = qt;
-              this.host = qt;
-              await this.ensureWirelessDebuggingEnabled().catch(() => {});
-              return qt;
-            }
-          }
-        }
-
-        // Check mDNS services if available on Android 11+
-        try {
-          const { stdout: mdnsOut } = await execPromise('adb mdns services').catch(() => ({ stdout: '' }));
-          const mdnsMatches = mdnsOut.match(/127\.0\.0\.1:(\d{4,5})|localhost:(\d{4,5})/gi) || [];
-          for (const matchTarget of mdnsMatches) {
-            const { stdout: connOut } = await execPromise(`adb connect ${matchTarget}`).catch(() => ({ stdout: '' }));
-            if (String(connOut).toLowerCase().includes('connected to')) {
-              const devs = await this.getDevices();
-              if (devs.some((d) => d.serial === matchTarget && d.state === 'device')) {
-                this.serial = matchTarget;
-                this.host = matchTarget;
-                await this.ensureWirelessDebuggingEnabled().catch(() => {});
-                return matchTarget;
-              }
-            }
-          }
-        } catch {}
-
-        // Scan dynamic wireless debugging port range (30000-50000 and 5555) with nmap
-        const { stdout } = await execPromise('nmap -p 5555,30000-50000 --open -T4 127.0.0.1');
-        const openPorts: string[] = [];
-        const regex = /(\d{4,5})\/tcp\s+open/gi;
-        let match: RegExpExecArray | null;
-        while ((match = regex.exec(stdout)) !== null) {
-          openPorts.push(match[1]);
-        }
-
-        for (const port of openPorts) {
-          const target = `127.0.0.1:${port}`;
-          const { stdout: connOut, stderr: connErr } = await execPromise(`adb connect ${target}`).catch((e) => ({
-            stdout: e.stdout || '',
-            stderr: e.stderr || e.message || ''
-          }));
-          const out = `${connOut} ${connErr}`.toLowerCase();
-          if (
-            (out.includes('connected to') || out.includes('already connected')) &&
-            !out.includes('unable') &&
-            !out.includes('failed') &&
-            !out.includes('cannot') &&
-            !out.includes('refused')
-          ) {
-            const devices = await this.getDevices();
-            const isOnline = devices.some((d) => d.serial === target && d.state === 'device');
-            if (isOnline) {
-              this.serial = target;
-              this.host = target;
-              await this.ensureWirelessDebuggingEnabled().catch(() => {});
-              return target;
+            if (devs.some((d) => d.serial === matchTarget && d.state === 'device')) {
+              this.serial = matchTarget;
+              this.host = matchTarget;
+              return matchTarget;
             }
           }
         }
       } catch {}
-      return '';
-    };
 
-    // Pass 1: Scan for currently open port
-    let connected = await doScanPass();
-    if (connected) return connected;
-
-    // Nothing found on Pass 1: Run trigger script (enable_wifi_debug.sh) to start wireless debugging
-    await this.runWifiDebugTriggerScript();
-    await new Promise((r) => setTimeout(r, 1500));
-
-    // Pass 2: Re-scan for newly opened port
-    connected = await doScanPass();
-    return connected;
-  }
-
-  /**
-   * Starts a continuous background watcher on startup so the script automatically finds the port
-   * and auto-enables wireless debugging whenever it turns off.
-   */
-  public startBackgroundAutoConnect(): void {
-    if (this.isAutoConnecting) return;
-    this.autoConnectWithRetry().catch(() => {});
-    this.startWifiDebuggingWatcher();
-  }
-
-  private wifiWatcherStarted = false;
-
-  /**
-   * Starts a continuous watchdog loop that ensures wireless debugging is always ON and reconnects on drop.
-   */
-  public startWifiDebuggingWatcher(): void {
-    if (this.wifiWatcherStarted) return;
-    this.wifiWatcherStarted = true;
-
-    setInterval(async () => {
-      if (this.autoConnectStopped) return;
-
-      try {
-        const devices = await this.getDevices().catch(() => []);
-        const hasOnline = devices.some((d) => d.state === 'device');
-
-        if (!hasOnline) {
-          // Wireless debugging disconnected or turned off -> turn it back on and auto-reconnect!
-          await this.ensureWirelessDebuggingEnabled().catch(() => {});
-          if (!this.isAutoConnecting) {
-            this.scanWithNmapAndConnect().catch(() => {});
-          }
-        } else {
-          // Connected: periodically ensure wireless debugging stays enabled in global settings
-          await this.ensureWirelessDebuggingEnabled().catch(() => {});
-        }
-      } catch {
-        // ignore
+      // Scan dynamic wireless debugging port range (30000-50000 and 5555) with nmap
+      const { stdout } = await execPromise('nmap -p 5555,30000-50000 --open -T4 127.0.0.1');
+      const openPorts: string[] = [];
+      const regex = /(\d{4,5})\/tcp\s+open/gi;
+      let match: RegExpExecArray | null;
+      while ((match = regex.exec(stdout)) !== null) {
+        openPorts.push(match[1]);
       }
-    }, 8000);
+
+      for (const port of openPorts) {
+        const target = `127.0.0.1:${port}`;
+        const { stdout: connOut, stderr: connErr } = await execPromise(`adb connect ${target}`).catch((e) => ({
+          stdout: e.stdout || '',
+          stderr: e.stderr || e.message || ''
+        }));
+        const out = `${connOut} ${connErr}`.toLowerCase();
+        if (
+          (out.includes('connected to') || out.includes('already connected')) &&
+          !out.includes('unable') &&
+          !out.includes('failed') &&
+          !out.includes('cannot') &&
+          !out.includes('refused')
+        ) {
+          const devices = await this.getDevices();
+          const isOnline = devices.some((d) => d.serial === target && d.state === 'device');
+          if (isOnline) {
+            this.serial = target;
+            this.host = target;
+            return target;
+          }
+        }
+      }
+    } catch {}
+    return '';
   }
+
+
 
   /**
    * Scans 127.0.0.1:30000-50000 with nmap and connects automatically.
@@ -506,7 +415,6 @@ export class AdbController {
     if (res.success) {
       this.host = host;
       this.serial = host;
-      await this.ensureWirelessDebuggingEnabled().catch(() => {});
       return { success: true, message: `connected to ${host}` };
     }
 
@@ -529,7 +437,6 @@ export class AdbController {
         if (res.success) {
           this.host = cand;
           this.serial = cand;
-          await this.ensureWirelessDebuggingEnabled().catch(() => {});
           return { success: true, message: `connected to ${cand}` };
         }
       }
@@ -544,7 +451,6 @@ export class AdbController {
       if (res.success) {
         this.host = host;
         this.serial = host;
-        await this.ensureWirelessDebuggingEnabled().catch(() => {});
         return { success: true, message: `connected to ${host}` };
       }
     } catch {}
