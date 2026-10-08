@@ -75,6 +75,10 @@ export class StoragePaths {
     return path.join(this.getConfigDir(), 'dashboard-message.json');
   }
 
+  public static getChannelIdPath(): string {
+    return path.join(this.getConfigDir(), 'channel-id.json');
+  }
+
   public static getLogsDir(): string {
     const dir = path.join(this.getBaseDir(), 'logs');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });

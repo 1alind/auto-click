@@ -10,11 +10,12 @@ export class DiscordBotClient {
   private client: Client | null = null;
   private token: string = '';
   private prefix: string = '!';
-  private targetChannelId: string = '1553844985776836638';
+  private targetChannelId: string | null = null;
   private dashboardMessageId: string | null = null;
   private lastMediaMessageId: string | null = null;
   private mediaDeleteTimer: NodeJS.Timeout | null = null;
   private dismissableErrorMsgIds: Set<string> = new Set();
+  private awaitingChannelId = false;
   private isConnecting = false;
   private shouldStayConnected = false;
   private retryTimer: NodeJS.Timeout | null = null;
@@ -26,14 +27,35 @@ export class DiscordBotClient {
   constructor(options?: {
     token?: string;
     prefix?: string;
-    targetChannelId?: string;
     onLog?: (msg: string, level: string, meta?: any) => void;
   }) {
     if (options?.token) this.token = options.token;
     if (options?.prefix) this.prefix = options.prefix;
-    if (options?.targetChannelId) this.targetChannelId = options.targetChannelId;
     if (options?.onLog) this.onLogCallback = options.onLog;
     this.loadDismissableErrorMessages();
+    this.targetChannelId = this.loadChannelId();
+  }
+
+  private loadChannelId(): string | null {
+    try {
+      const p = StoragePaths.getChannelIdPath();
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed?.channelId) return parsed.channelId;
+      }
+    } catch {}
+    return null;
+  }
+
+  public saveChannelId(id: string): void {
+    this.targetChannelId = id;
+    try {
+      const p = StoragePaths.getChannelIdPath();
+      const dir = path.dirname(p);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(p, JSON.stringify({ channelId: id }), 'utf-8');
+    } catch {}
   }
 
   public registerCommand(command: CommandDefinition): void {
@@ -219,21 +241,6 @@ export class DiscordBotClient {
     if (this.targetChannelId) {
       const ch = await this.client.channels.fetch(this.targetChannelId).catch(() => null);
       if (ch && ch.isTextBased()) return ch;
-    }
-
-    // Auto-discover first available text channel in bot's guilds
-    for (const guild of this.client.guilds.cache.values()) {
-      const textCh = guild.channels.cache.find(
-        (c) =>
-          c.isTextBased() &&
-          (c as any).viewable &&
-          (c as any).permissionsFor?.(this.client!.user!)?.has(['ViewChannel', 'SendMessages'])
-      );
-      if (textCh) {
-        this.targetChannelId = textCh.id;
-        this.log(`📍 Auto-selected Discord channel #${(textCh as any).name} (${textCh.id})`, 'info');
-        return textCh;
-      }
     }
 
     return null;
@@ -501,24 +508,54 @@ export class DiscordBotClient {
     if (!this.client) return;
 
     this.client.on(Events.ClientReady, async () => {
-      await this.resolveTargetChannel().catch(() => {});
-      this.log(`🤖 Discord Client is ready! Monitoring channel ${this.targetChannelId} with prefix "${this.prefix}"`, 'info');
-      try {
-        const { MacroManager } = await import('./macroManager');
-        const isRunning = Boolean(MacroManager.getRunningMacro());
-        await this.updateDashboard({
-          content: isRunning ? '-# airstrike working' : '-# 🟢 bot online',
-          isRunning
-        }).catch(() => {});
-        await MacroManager.resumeStartIfNeeded();
-      } catch {
-        // ignore ready notification error
+      this.log(`🤖 Discord Client is ready!`, 'info');
+      
+      if (!this.targetChannelId) {
+        this.awaitingChannelId = true;
+        this.log('⚠️ Target channel not configured. Please reply with the Channel ID to configure.', 'warn');
+        for (const guild of this.client!.guilds.cache.values()) {
+          const textCh = guild.channels.cache.find(
+            (c) => c.isTextBased() && (c as any).permissionsFor?.(this.client!.user!)?.has(['ViewChannel', 'SendMessages'])
+          );
+          if (textCh) {
+            await (textCh as any).send('🤖 **Bot initialized.** Please reply with the `Channel ID` you want me to use for the dashboard.').catch(() => {});
+          }
+        }
+      } else {
+        await this.resolveTargetChannel().catch(() => {});
+        this.log(`Monitoring channel ${this.targetChannelId} with prefix "${this.prefix}"`, 'info');
+        try {
+          const { MacroManager } = await import('./macroManager');
+          const isRunning = Boolean(MacroManager.getRunningMacro());
+          await this.updateDashboard({
+            content: isRunning ? '-# airstrike working' : '-# 🟢 bot online',
+            isRunning
+          }).catch(() => {});
+          await MacroManager.resumeStartIfNeeded();
+        } catch {
+          // ignore ready notification error
+        }
       }
     });
 
     this.client.on(Events.MessageCreate, async (message: Message) => {
       // Ignore bot messages
       if (message.author.bot) return;
+
+      if (this.awaitingChannelId) {
+        const channelId = message.content.trim();
+        if (/^\d{15,20}$/.test(channelId)) {
+          this.saveChannelId(channelId);
+          this.awaitingChannelId = false;
+          message.reply(`✅ Target channel set to \`${channelId}\`.`).catch(() => {});
+          this.log(`Channel configured: ${channelId}`, 'info');
+          // Restart to properly initialize dashboard in new channel
+          setTimeout(() => process.exit(0), 1000);
+        } else {
+          message.reply('⚠️ Invalid Channel ID format. Please reply with a valid 15-20 digit Channel ID.').catch(() => {});
+        }
+        return;
+      }
 
       // Update targetChannelId to active channel so bot stays synchronized
       if (message.channel.isTextBased()) {
