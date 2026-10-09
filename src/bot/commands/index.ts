@@ -638,6 +638,24 @@ export const crashTestCommand: CommandDefinition = {
   }
 };
 
+export const cleanupCommand: CommandDefinition = {
+  name: 'cleanup',
+  description: 'Triggers an automatic cleanup of all messages in the channel (except dashboard).',
+  usage: 'cleanup',
+  aliases: ['autoclean', 'autoclear'],
+
+  execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const { botManager } = await import('../botManager');
+    const discord = botManager.getDiscordBot();
+    
+    ctx.log('🧹 Triggering channel cleanup...', 'info');
+    discord.saveChannelStatus(false);
+    discord.startAutoCleanupTask();
+    
+    return { success: true, message: 'cleanup started' };
+  }
+};
+
 export const macroCommand: CommandDefinition = {
   name: 'macro',
   description: 'Create, edit, run, list, and delete custom multi-step automation flows directly via Discord.',
@@ -1414,6 +1432,12 @@ const COMMAND_MANUALS: Record<string, string> = {
     '• `screenshot crop` — captures screen and crops 150×150 center'
   ].join('\n'),
 
+  cleanup: [
+    '**cleanup** — Manually trigger an automatic channel purge.',
+    'Removes all messages in the channel except the main dashboard message.',
+    'Includes a 5-second delay between deletions to stay safe from Discord rate limits.'
+  ].join('\n'),
+
   connect: [
     '**connect** — Connect to Wireless ADB',
     'usage: `connect <port>` or `connect <ip:port>`',
@@ -1548,6 +1572,7 @@ export const helpCommand: CommandDefinition = {
       '• `images` — send all saved images & names from `/sdcard/autoclick/` (`help images`)',
       '• `connect` / `pair` / `devices` — wireless ADB connection tools (`help connect`)',
       '• `clear` / `purge` — delete recent messages from the Discord channel',
+      '• `cleanup` — auto-delete all channel messages with 5s delay until empty (`help cleanup`)',
       '• `status` — check ADB device & bot status',
       '• `update` / `check-update` / `restart` — GitHub auto-updater & process control',
       `• custom commands: ${customList}`

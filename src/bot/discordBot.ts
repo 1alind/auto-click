@@ -16,6 +16,7 @@ export class DiscordBotClient {
   private mediaDeleteTimer: NodeJS.Timeout | null = null;
   private dismissableErrorMsgIds: Set<string> = new Set();
   private awaitingChannelId = false;
+  private isClean = false;
   private isConnecting = false;
   private shouldStayConnected = false;
   private retryTimer: NodeJS.Timeout | null = null;
@@ -34,6 +35,7 @@ export class DiscordBotClient {
     if (options?.onLog) this.onLogCallback = options.onLog;
     this.loadDismissableErrorMessages();
     this.targetChannelId = this.loadChannelId();
+    this.isClean = this.loadChannelStatus();
   }
 
   private loadChannelId(): string | null {
@@ -50,11 +52,34 @@ export class DiscordBotClient {
 
   public saveChannelId(id: string): void {
     this.targetChannelId = id;
+    this.isClean = false; // Reset clean status when channel ID changes
     try {
       const p = StoragePaths.getChannelIdPath();
       const dir = path.dirname(p);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(p, JSON.stringify({ channelId: id }), 'utf-8');
+    } catch {}
+  }
+
+  private loadChannelStatus(): boolean {
+    try {
+      const p = StoragePaths.getChannelStatusPath();
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, 'utf-8');
+        const parsed = JSON.parse(raw);
+        return Boolean(parsed?.isClean);
+      }
+    } catch {}
+    return false;
+  }
+
+  public saveChannelStatus(isClean: boolean): void {
+    this.isClean = isClean;
+    try {
+      const p = StoragePaths.getChannelStatusPath();
+      const dir = path.dirname(p);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(p, JSON.stringify({ isClean }), 'utf-8');
     } catch {}
   }
 
@@ -238,6 +263,38 @@ export class DiscordBotClient {
         }
       } catch {}
     }
+  }
+
+  public async purgeChannel(): Promise<void> {
+    const textChannel = await this.resolveTargetChannel();
+    if (!textChannel) return;
+
+    let messages = await textChannel.messages.fetch({ limit: 100 });
+    let dashboardId = this.getDashboardMessageId();
+
+    let toDelete = messages.filter((m: any) => m.id !== dashboardId);
+
+    if (toDelete.size === 0) {
+      this.saveChannelStatus(true);
+      return;
+    }
+
+    this.log(`🧹 Purging ${toDelete.size} messages...`, 'info');
+    for (const msg of toDelete.values()) {
+      await msg.delete().catch(() => {});
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+    this.log('✅ Purge complete.', 'info');
+  }
+
+  public startAutoCleanupTask(): void {
+    if (this.isClean) return;
+    
+    // Check every 20 minutes
+    setInterval(async () => {
+      if (this.isClean) return;
+      await this.purgeChannel();
+    }, 20 * 60 * 1000);
   }
 
   public async resolveTargetChannel(): Promise<any> {
@@ -543,6 +600,7 @@ export class DiscordBotClient {
             isRunning
           }).catch(() => {});
           await MacroManager.resumeStartIfNeeded();
+          this.startAutoCleanupTask();
         } catch {
           // ignore ready notification error
         }
