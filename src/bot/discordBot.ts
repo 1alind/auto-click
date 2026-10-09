@@ -225,14 +225,8 @@ export class DiscordBotClient {
         files.push(new AttachmentBuilder(options.fileBuffer, { name }));
       }
 
-      const dismissHint = '\n-# 💡 (react with any emoji to remove this message)';
-      
       // Ensure each line starts with -#
-      const formattedBody = this.formatContent(options.content);
-
-      const body = formattedBody.includes('react with any emoji')
-        ? formattedBody
-        : `${formattedBody}${dismissHint}`;
+      const body = this.formatContent(options.content);
 
       const sentMsg = await textChannel.send({
         content: body,
@@ -258,6 +252,8 @@ export class DiscordBotClient {
       .map((line) => {
         const trimmed = line.trim();
         if (!trimmed) return '';
+        // Never send reaction hint line
+        if (/react with any emoji/i.test(trimmed) || /remove this message/i.test(trimmed)) return '';
         // If it's already a component/button-only line (starting with <) or already formatted, leave it, else prepend -#
         return trimmed.startsWith('-#') || trimmed.startsWith('<') ? trimmed : `-# ${trimmed}`;
       })
