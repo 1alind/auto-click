@@ -17,6 +17,8 @@ export class DiscordBotClient {
   private dismissableErrorMsgIds: Set<string> = new Set();
   private awaitingChannelId = false;
   private isClean = false;
+  private cleanupInterval: NodeJS.Timeout | null = null;
+  private isPurging = false;
   private isConnecting = false;
   private shouldStayConnected = false;
   private retryTimer: NodeJS.Timeout | null = null;
@@ -38,16 +40,32 @@ export class DiscordBotClient {
     this.isClean = this.loadChannelStatus();
   }
 
-  private loadChannelId(): string | null {
-    try {
-      const p = StoragePaths.getChannelIdPath();
-      if (fs.existsSync(p)) {
-        const raw = fs.readFileSync(p, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (parsed?.channelId) return parsed.channelId;
-      }
-    } catch {}
+  public loadChannelId(): string | null {
+    const candidatePaths = [
+      StoragePaths.getChannelIdPath(),
+      path.join(StoragePaths.getBaseDir(), 'channel-id.json'),
+      '/sdcard/autoclick/config/channel-id.json',
+      '/sdcard/autoclick/channel-id.json'
+    ];
+    for (const p of candidatePaths) {
+      try {
+        if (fs.existsSync(p)) {
+          const raw = fs.readFileSync(p, 'utf-8').trim();
+          try {
+            const parsed = JSON.parse(raw);
+            const id = parsed?.channelId || parsed?.channel_id || parsed?.id || (typeof parsed === 'string' ? parsed : null);
+            if (id && typeof id === 'string') return id.trim();
+          } catch {
+            if (/^\d{15,22}$/.test(raw)) return raw;
+          }
+        }
+      } catch {}
+    }
     return null;
+  }
+
+  public getMainChannelId(): string | null {
+    return this.loadChannelId() || this.targetChannelId;
   }
 
   public saveChannelId(id: string): void {
@@ -265,34 +283,120 @@ export class DiscordBotClient {
     }
   }
 
-  public async purgeChannel(): Promise<void> {
-    const textChannel = await this.resolveTargetChannel();
-    if (!textChannel) return;
-
-    let messages = await textChannel.messages.fetch({ limit: 100 });
-    let dashboardId = this.getDashboardMessageId();
-
-    let toDelete = messages.filter((m: any) => m.id !== dashboardId);
-
-    if (toDelete.size === 0) {
-      this.saveChannelStatus(true);
-      return;
+  public async purgeChannel(): Promise<{ totalDeleted: number; error?: string }> {
+    if (this.isPurging) {
+      return { totalDeleted: 0, error: 'Purge already in progress' };
     }
+    this.isPurging = true;
 
-    this.log(`🧹 Purging ${toDelete.size} messages...`, 'info');
-    for (const msg of toDelete.values()) {
-      await msg.delete().catch(() => {});
-      await new Promise((r) => setTimeout(r, 5000));
+    try {
+      const textChannel = await this.resolveTargetChannel();
+      if (!textChannel) {
+        this.log('⚠️ Target channel from channel-id.json not found or not accessible for cleanup', 'warn');
+        return { totalDeleted: 0, error: 'Main channel from channel-id.json not found' };
+      }
+
+      const dashboardId = this.getDashboardMessageId();
+
+      // Fetch messages from the main channel
+      const fetched = await textChannel.messages.fetch({ limit: 100 }).catch((e: any) => {
+        this.log(`⚠️ Failed to fetch messages for cleanup: ${e.message}`, 'warn');
+        return null;
+      });
+
+      if (!fetched) {
+        return { totalDeleted: 0, error: 'Failed to fetch messages' };
+      }
+
+      // Filter out the persistent dashboard message
+      const toDelete = fetched.filter((m: any) => m.id !== dashboardId);
+
+      if (toDelete.size === 0) {
+        this.saveChannelStatus(true);
+        if (this.cleanupInterval) {
+          clearInterval(this.cleanupInterval);
+          this.cleanupInterval = null;
+        }
+        this.log('✅ Main channel is already clean (only dashboard remains).', 'info');
+        return { totalDeleted: 0 };
+      }
+
+      this.log(`🧹 Found ${toDelete.size} message(s) to remove in main channel #${textChannel.name || ''} (${textChannel.id})`, 'info');
+
+      // Send a temporary notice to Discord as requested
+      let tempNotice: any = null;
+      try {
+        tempNotice = await textChannel.send(`-# 🧹 Removing ${toDelete.size} message(s) from channel (5s delay between messages)...`);
+      } catch {}
+
+      let deletedCount = 0;
+      for (const msg of toDelete.values()) {
+        if (tempNotice && msg.id === tempNotice.id) continue;
+        if (msg.id === dashboardId) continue;
+
+        try {
+          await msg.delete();
+          deletedCount++;
+        } catch (delErr: any) {
+          this.log(`⚠️ Could not delete message ${msg.id}: ${delErr.message}`, 'warn');
+        }
+
+        // 5-second delay between deletions to avoid rate limits
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+
+      // Check if channel is now clean
+      const remaining = await textChannel.messages.fetch({ limit: 50 }).catch(() => null);
+      const remainingOther = remaining
+        ? remaining.filter((m: any) => m.id !== dashboardId && (!tempNotice || m.id !== tempNotice.id))
+        : null;
+
+      if (!remainingOther || remainingOther.size === 0) {
+        this.saveChannelStatus(true);
+        if (this.cleanupInterval) {
+          clearInterval(this.cleanupInterval);
+          this.cleanupInterval = null;
+        }
+        this.log('✅ Main channel is now clean. Saved isClean: true.', 'info');
+      }
+
+      // Update and auto-delete the temporary notice after 4 seconds
+      if (tempNotice) {
+        try {
+          await tempNotice.edit(`-# ✅ Cleanup complete: ${deletedCount} message(s) removed.`);
+          setTimeout(async () => {
+            await tempNotice.delete().catch(() => {});
+          }, 4000);
+        } catch {
+          await tempNotice.delete().catch(() => {});
+        }
+      }
+
+      return { totalDeleted: deletedCount };
+    } finally {
+      this.isPurging = false;
     }
-    this.log('✅ Purge complete.', 'info');
   }
 
-  public startAutoCleanupTask(): void {
-    if (this.isClean) return;
-    
-    // Check every 20 minutes
-    setInterval(async () => {
-      if (this.isClean) return;
+  public startAutoCleanupTask(runImmediately = true): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+
+    if (runImmediately && !this.isClean) {
+      void this.purgeChannel();
+    }
+
+    // Periodically check every 20 minutes if not marked clean
+    this.cleanupInterval = setInterval(async () => {
+      if (this.isClean) {
+        if (this.cleanupInterval) {
+          clearInterval(this.cleanupInterval);
+          this.cleanupInterval = null;
+        }
+        return;
+      }
       await this.purgeChannel();
     }, 20 * 60 * 1000);
   }
@@ -300,8 +404,9 @@ export class DiscordBotClient {
   public async resolveTargetChannel(): Promise<any> {
     if (!this.client || !this.client.isReady()) return null;
 
-    if (this.targetChannelId) {
-      const ch = await this.client.channels.fetch(this.targetChannelId!).catch(() => null);
+    const channelId = this.getMainChannelId();
+    if (channelId) {
+      const ch = await this.client.channels.fetch(channelId).catch(() => null);
       if (ch && ch.isTextBased()) return ch;
     }
 
@@ -578,7 +683,8 @@ export class DiscordBotClient {
     this.client.on(Events.ClientReady, async () => {
       this.log(`🤖 Discord Client is ready!`, 'info');
       
-      if (!this.targetChannelId) {
+      const mainChannelId = this.getMainChannelId();
+      if (!mainChannelId) {
         this.awaitingChannelId = true;
         this.log('⚠️ Target channel not configured. Please reply with the Channel ID to configure.', 'warn');
         for (const guild of this.client!.guilds.cache.values()) {
@@ -590,8 +696,9 @@ export class DiscordBotClient {
           }
         }
       } else {
+        this.targetChannelId = mainChannelId;
         await this.resolveTargetChannel().catch(() => {});
-        this.log(`Monitoring channel ${this.targetChannelId} with prefix "${this.prefix}"`, 'info');
+        this.log(`Monitoring main channel ${mainChannelId} from channel-id.json with prefix "${this.prefix}"`, 'info');
         try {
           const { MacroManager } = await import('./macroManager');
           const isRunning = Boolean(MacroManager.getRunningMacro());
@@ -600,7 +707,7 @@ export class DiscordBotClient {
             isRunning
           }).catch(() => {});
           await MacroManager.resumeStartIfNeeded();
-          this.startAutoCleanupTask();
+          this.startAutoCleanupTask(true);
         } catch {
           // ignore ready notification error
         }
@@ -624,11 +731,6 @@ export class DiscordBotClient {
           message.reply('⚠️ Invalid Channel ID format. Please reply with a valid 15-20 digit Channel ID.').catch(() => {});
         }
         return;
-      }
-
-      // Update targetChannelId to active channel so bot stays synchronized
-      if (message.channel.isTextBased()) {
-        this.targetChannelId = message.channelId;
       }
 
       const raw = message.content.trim();
@@ -714,10 +816,6 @@ export class DiscordBotClient {
 
     this.client.on(Events.InteractionCreate, async (interaction) => {
       if (!interaction.isButton()) return;
-
-      if (interaction.channelId) {
-        this.targetChannelId = interaction.channelId;
-      }
 
       const customId = interaction.customId;
       this.log(`🔘 Button clicked: "${customId}" by ${interaction.user.tag}`, 'info');

@@ -1,5 +1,8 @@
 import { exec } from 'child_process';
 import util from 'util';
+import fs from 'fs';
+import path from 'path';
+import { StoragePaths } from './storagePaths';
 import { WebhookService } from './webhook';
 import { CrashHandler } from './crashHandler';
 import { ConsoleLogger } from './consoleLogger';
@@ -48,6 +51,57 @@ export class AutoUpdater {
 
   public setGitHubRepo(repo: string): void {
     this.githubRepo = repo;
+  }
+
+  public static recordDownloadTimestamp(d: Date = new Date()): void {
+    try {
+      const p = StoragePaths.getLastUpdatedPath();
+      const dir = path.dirname(p);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(p, JSON.stringify({ lastUpdated: d.toISOString() }), 'utf-8');
+    } catch {}
+  }
+
+  public static getLastDownloadDate(): Date {
+    try {
+      const p = StoragePaths.getLastUpdatedPath();
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed?.lastUpdated) {
+          const d = new Date(parsed.lastUpdated);
+          if (!isNaN(d.getTime())) return d;
+        }
+      }
+    } catch {}
+
+    // Check git FETCH_HEAD mtime (written by git on fetch/pull)
+    try {
+      if (fs.existsSync('.git/FETCH_HEAD')) {
+        const stat = fs.statSync('.git/FETCH_HEAD');
+        if (stat.mtime && !isNaN(stat.mtime.getTime())) {
+          this.recordDownloadTimestamp(stat.mtime);
+          return stat.mtime;
+        }
+      }
+    } catch {}
+
+    // Check commit author/committer date
+    try {
+      const { execSync } = require('child_process');
+      const commitDateStr = execSync('git log -1 --format=%cI', { timeout: 3000 }).toString().trim();
+      if (commitDateStr) {
+        const d = new Date(commitDateStr);
+        if (!isNaN(d.getTime())) {
+          this.recordDownloadTimestamp(d);
+          return d;
+        }
+      }
+    } catch {}
+
+    const now = new Date();
+    this.recordDownloadTimestamp(now);
+    return now;
   }
 
   public getGitHubToken(): string {
@@ -327,6 +381,9 @@ export class AutoUpdater {
         timeout: 30000
       });
       this.log(`Git pull output: ${this.sanitize(pullOut.trim())}`, 'info');
+
+      // Record download timestamp from GitHub
+      AutoUpdater.recordDownloadTimestamp();
 
       // Auto run npm i whenever files are updated
       this.log('📦 Files updated: Running "npm i --legacy-peer-deps" to ensure all packages and dependencies are synchronized...', 'info');

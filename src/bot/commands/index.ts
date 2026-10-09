@@ -648,11 +648,15 @@ export const cleanupCommand: CommandDefinition = {
     const { botManager } = await import('../botManager');
     const discord = botManager.getDiscordBot();
     
-    ctx.log('🧹 Triggering channel cleanup...', 'info');
+    ctx.log('🧹 Triggering immediate channel cleanup...', 'info');
     discord.saveChannelStatus(false);
-    discord.startAutoCleanupTask();
     
-    return { success: true, message: 'cleanup started' };
+    // Run cleanup immediately in background so command finishes cleanly
+    void discord.purgeChannel().then((res) => {
+      ctx.log(`✅ Cleanup finished: removed ${res.totalDeleted} message(s).`, 'info');
+    });
+    
+    return { success: true, message: 'cleanup started in main channel' };
   }
 };
 

@@ -83,6 +83,10 @@ export class StoragePaths {
     return path.join(this.getConfigDir(), 'channel-status.json');
   }
 
+  public static getLastUpdatedPath(): string {
+    return path.join(this.getConfigDir(), 'last-updated.json');
+  }
+
   public static getLogsDir(): string {
     const dir = path.join(this.getBaseDir(), 'logs');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });

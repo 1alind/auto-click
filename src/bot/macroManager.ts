@@ -6,6 +6,7 @@ import { TemplateMatcher } from './matcher';
 import { RefImageManager } from './refImage';
 import { screenRuleManager, ScreenRuleManager } from './screenRuleManager';
 import { StoragePaths } from './storagePaths';
+import { AutoUpdater } from './autoUpdater';
 import { createControlButtonsJson } from './discordButtons';
 
 export type MacroActionType =
@@ -717,8 +718,9 @@ export class MacroManager {
     const getLiveStatusContent = (statusText: string = 'working'): string => {
       const elapsedMs = Date.now() - startTime;
       const now = new Date();
-      // Updated time from git/now
-      const updatedTimeStr = format12HourTime(now);
+      // Last downloaded/updated from GitHub timestamp
+      const lastDownloadDate = AutoUpdater.getLastDownloadDate();
+      const updatedTimeStr = format12HourTime(lastDownloadDate);
       const dateStr = format12HourTime(now);
       const workingTimeStr = formatWorkingTime(elapsedMs);
 
