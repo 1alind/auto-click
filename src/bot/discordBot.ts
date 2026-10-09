@@ -845,8 +845,8 @@ export class DiscordBotClient {
         case 'btn_screenshot':
           commandName = 'screenshot';
           break;
-        case 'btn_test':
-          commandName = 'test';
+        case 'btn_ping':
+          commandName = 'ping';
           break;
         default:
           if (customId.startsWith('cmd_')) {

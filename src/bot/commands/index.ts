@@ -181,136 +181,72 @@ export const screenshotCommand: CommandDefinition = {
 
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
     const { botManager } = await import('../botManager');
-    const adb = botManager.getAdbController();
-    const webhook = botManager.getWebhookService();
     const { TemplateMatcher } = await import('../matcher');
     const fs = await import('fs');
     const path = await import('path');
-    const os = await import('os');
+    const adb = botManager.getAdbController();
+    const discord = botManager.getDiscordBot();
 
-    ctx.log('📸 Capturing screenshot...', 'info');
-    const screenBuffer = await adb.screencap();
-
-    let finalBuffer = screenBuffer;
-    let labelText = '**screenshot**';
-    let isRegionCrop = false;
-
-    // Robust parsing of screenshot cropping arguments:
-    // Supports:
-    // 1) "screenshot 79-220 523-1721" (ranges)
-    // 2) "screenshot 79 220 523 1721" (4 coordinate values)
-    // 3) "screenshot 500 1000" (center around X, Y with 150x150 box)
-    // 4) "screenshot crop [size]" or "screenshot center-crop"
-    let region: { minX: number; maxX: number; minY: number; maxY: number } | null = null;
-    let isCenterCrop = false;
-    let centerCropSize = 150;
-
-    const rawArgsJoined = ctx.args
-      .join(' ')
-      .replace(/[–—]/g, '-')
-      .replace(/\b[xy]\s*:\s*/gi, '')
-      .replace(/,/g, ' ');
-
-    if (/\b(?:center-?crop|crop)\b/i.test(rawArgsJoined)) {
-      const matchSize = rawArgsJoined.match(/\b(?:crop|center-?crop)\s+(\d+)\b/i);
-      if (matchSize) centerCropSize = parseInt(matchSize[1], 10) || 150;
-      isCenterCrop = true;
+    let fullPng: Buffer;
+    try {
+      fullPng = await adb.screencap();
+    } catch (err: any) {
+      const errMsg = `screenshot failed: ${err.message}`;
+      if (ctx.reply) await ctx.reply(errMsg);
+      return { success: false, message: errMsg };
     }
 
-    // Check for range patterns: e.g. "79-220" and "523-1721"
-    const rangeRegex = /(\d+)\s*-\s*(\d+)/g;
-    const ranges: Array<{ min: number; max: number }> = [];
-    let rMatch: RegExpExecArray | null;
-    while ((rMatch = rangeRegex.exec(rawArgsJoined)) !== null) {
-      ranges.push({ min: Number(rMatch[1]), max: Number(rMatch[2]) });
-    }
+    let finalBuffer = fullPng;
+    let labelText = '-# 📸 screenshot captured';
+    let shouldSave = false;
+    let savedFileName = `screenshot_${Date.now()}.png`;
 
-    if (ranges.length >= 2) {
-      region = {
-        minX: Math.min(ranges[0].min, ranges[0].max),
-        maxX: Math.max(ranges[0].min, ranges[0].max),
-        minY: Math.min(ranges[1].min, ranges[1].max),
-        maxY: Math.max(ranges[1].min, ranges[1].max)
-      };
-    } else if (ranges.length === 1 && !isCenterCrop) {
-      region = {
-        minX: Math.min(ranges[0].min, ranges[0].max),
-        maxX: Math.max(ranges[0].min, ranges[0].max),
-        minY: 0,
-        maxY: 2400
-      };
-    } else if (!isCenterCrop) {
-      // Check for standalone numbers (ignore save argument words)
-      const nonSaveArgs = rawArgsJoined
-        .replace(/\bsave\s+[^\s]+/i, '')
-        .replace(/\bsave\b/i, '')
-        .replace(/\b(?:center-?crop|crop)\b/i, '');
-      const numbers = (nonSaveArgs.match(/\d+/g) || []).map(Number);
+    const args = ctx.args || [];
+    let rangeArg: string | undefined;
 
-      if (numbers.length >= 4) {
-        region = {
-          minX: Math.min(numbers[0], numbers[1]),
-          maxX: Math.max(numbers[0], numbers[1]),
-          minY: Math.min(numbers[2], numbers[3]),
-          maxY: Math.max(numbers[2], numbers[3])
-        };
-      } else if (numbers.length === 2) {
-        // "screenshot X Y" -> crop 150x150 box centered on (X, Y)
-        const cx = numbers[0];
-        const cy = numbers[1];
-        const half = 75;
-        region = {
-          minX: Math.max(0, cx - half),
-          maxX: cx + half,
-          minY: Math.max(0, cy - half),
-          maxY: cy + half
-        };
-      } else if (numbers.length === 3) {
-        // "screenshot X Y size"
-        const cx = numbers[0];
-        const cy = numbers[1];
-        const half = Math.floor(numbers[2] / 2);
-        region = {
-          minX: Math.max(0, cx - half),
-          maxX: cx + half,
-          minY: Math.max(0, cy - half),
-          maxY: cy + half
-        };
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i].toLowerCase();
+      if (a === 'save') {
+        shouldSave = true;
+        if (args[i + 1] && !args[i + 1].startsWith('-')) {
+          savedFileName = args[i + 1].endsWith('.png') ? args[i + 1] : `${args[i + 1]}.png`;
+          i++;
+        }
+      } else if (a === 'crop') {
+        const cropped = await TemplateMatcher.cropCenter(fullPng, 150, 150).catch(() => null);
+        if (cropped) {
+          finalBuffer = cropped;
+          labelText = '-# 📸 screenshot center crop (150x150)';
+        }
+      } else if (a.includes('-') && !rangeArg) {
+        rangeArg = a;
+        const nextArg = args[i + 1];
+        if (nextArg && nextArg.includes('-')) {
+          const [minX, maxX] = a.split('-').map(Number);
+          const [minY, maxY] = nextArg.split('-').map(Number);
+          if (!isNaN(minX) && !isNaN(maxX) && !isNaN(minY) && !isNaN(maxY)) {
+            const cropRes = await TemplateMatcher.cropRegion(fullPng, minX, minY, maxX, maxY).catch(() => null);
+            if (cropRes && cropRes.buffer) {
+              finalBuffer = cropRes.buffer;
+              labelText = `-# 📸 screenshot cropped (${minX}-${maxX} ${minY}-${maxY})`;
+              i++;
+            }
+          }
+        }
       }
     }
-
-    if (region) {
-      const cropped = await TemplateMatcher.cropRegion(screenBuffer, region.minX, region.minY, region.maxX, region.maxY);
-      finalBuffer = cropped.buffer;
-      isRegionCrop = true;
-      labelText = `**cropped** *X:${region.minX}–${region.maxX}, Y:${region.minY}–${region.maxY} (${cropped.width}×${cropped.height})*`;
-    } else if (isCenterCrop) {
-      finalBuffer = await TemplateMatcher.cropCenter(screenBuffer, centerCropSize, centerCropSize);
-      labelText = `**cropped** *${centerCropSize}×${centerCropSize}*`;
-    }
-
-    // Check if "save" was requested
-    const saveIdx = ctx.args.findIndex((a) => a.toLowerCase() === 'save');
-    const shouldSave = saveIdx !== -1;
-    let savedFileName = `screen_${Date.now()}.png`;
 
     if (shouldSave) {
-      const customName = ctx.args[saveIdx + 1];
-      if (customName && !customName.includes('-')) {
-        const clean = path.basename(customName.trim());
-        savedFileName = /\.(png|jpg|jpeg)$/i.test(clean) ? clean : `${clean}.png`;
-      } else {
-        savedFileName = isRegionCrop ? `crop_${Date.now()}.png` : `screen_${Date.now()}.png`;
+      const saveDir = '/sdcard/autoclick';
+      try {
+        if (!fs.existsSync(saveDir)) fs.mkdirSync(saveDir, { recursive: true });
+        fs.writeFileSync(path.join(saveDir, savedFileName), finalBuffer);
+        labelText += ` (saved to ${savedFileName})`;
+      } catch (saveErr: any) {
+        ctx.log(`Failed to save screenshot to sdcard: ${saveErr.message}`, 'warn');
       }
-
-      const targetDir = StoragePaths.getImagesDir();
-      const fullSavePath = path.join(targetDir, savedFileName);
-      await fs.promises.writeFile(fullSavePath, finalBuffer);
-      ctx.log(`💾 Saved permanent image to ${fullSavePath}`, 'info');
-      labelText = `**saved** \`${savedFileName}\``;
     }
 
-    const discord = botManager.getDiscordBot();
     if (discord.isConnected()) {
       await discord.updateDashboard({
         content: labelText,
@@ -1034,200 +970,36 @@ export const imagesCommand: CommandDefinition = {
   }
 };
 
-export const testCommand: CommandDefinition = {
-  name: 'test',
-  description: 'Benchmarks BOTH the old PNG file method and the new RAM memory method side-by-side and compares their times.',
-  usage: 'test [imageName] [minX-maxX minY-maxY]',
-  aliases: ['benchmark', 'speed', 'speedtest', 'timetest', 'match-test', 'compare-test'],
+export const pingCommand: CommandDefinition = {
+  name: 'ping',
+  description: 'Checks Discord gateway latency and responsiveness.',
+  usage: 'ping',
+  aliases: ['p', 'pong', 'latency'],
 
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
     const { botManager } = await import('../botManager');
-    const { TemplateMatcher } = await import('../matcher');
-    const { RefImageManager } = await import('../refImage');
-    const fs = await import('fs');
-    const path = await import('path');
-    const os = await import('os');
+    const discord = botManager.getDiscordBot();
+    const client = discord.getClient();
 
-    const adb = botManager.getAdbController();
-    const config = botManager.getConfig();
+    const wsPing = client && client.ws && client.ws.ping >= 0 ? Math.round(client.ws.ping) : -1;
+    const msgTime = ctx.discordMessage?.createdTimestamp;
+    const now = Date.now();
+    const roundtrip = msgTime ? Math.max(0, now - msgTime) : 0;
 
-    // Resolve image & optional crop region
-    let targetImageName = 'asbtn.png';
-    let customRegion: { minX: number; maxX: number; minY: number; maxY: number } | undefined;
-    let tempMinX = 0;
-    let tempMaxX = 0;
-    let rangeIndex = 0;
-
-    for (const arg of ctx.args) {
-      if (arg.includes('-')) {
-        const parts = arg.split('-').map(Number);
-        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-          if (rangeIndex === 0) {
-            tempMinX = parts[0];
-            tempMaxX = parts[1];
-            rangeIndex++;
-          } else {
-            customRegion = {
-              minX: tempMinX,
-              maxX: tempMaxX,
-              minY: parts[0],
-              maxY: parts[1]
-            };
-          }
-        }
-      } else if (arg.trim()) {
-        targetImageName = arg.trim();
-      }
-    }
-
-    const region =
-      customRegion ||
-      (targetImageName === 'asbtn.png' && ctx.args.length === 0
-        ? { minX: 771, maxX: 840, minY: 1107, maxY: 1176 }
-        : undefined);
-
-    // Resolve template image path
-    const homeDir = process.env.HOME || os.homedir() || '';
-    const sharedDirs = [
-      path.resolve(homeDir, 'storage/shared/autoclick'),
-      '/sdcard/autoclick',
-      '/storage/emulated/0/autoclick'
-    ];
-    let resolvedImgPath = '';
-    for (const dir of sharedDirs) {
-      const candidate = path.join(dir, targetImageName);
-      if (fs.existsSync(candidate)) {
-        resolvedImgPath = candidate;
-        break;
-      }
-      const withPng = path.join(dir, `${targetImageName}.png`);
-      if (fs.existsSync(withPng)) {
-        resolvedImgPath = withPng;
-        break;
-      }
-      const withJpg = path.join(dir, `${targetImageName}.jpg`);
-      if (fs.existsSync(withJpg)) {
-        resolvedImgPath = withJpg;
-        break;
-      }
-    }
-
-    if (!resolvedImgPath) {
-      if (targetImageName.toLowerCase().startsWith('pfp')) {
-        resolvedImgPath = await RefImageManager.ensureRefImage();
-      } else {
-        const notFound = `image "${targetImageName}" not found in /sdcard/autoclick/`;
-        if (ctx.reply) await ctx.reply(notFound);
-        return { success: false, message: notFound };
-      }
-    }
-
-    const effectiveThreshold = config.matchThreshold || 0.75;
-    const scales = [0.7, 0.85, 1.0, 1.15, 1.3];
+    const parts = [
+      '-# 🏓 pong!',
+      roundtrip > 0 ? `-# roundtrip: ${roundtrip}ms` : '',
+      wsPing >= 0 ? `-# websocket: ${wsPing}ms` : ''
+    ].filter(Boolean).join('\n');
 
     if (ctx.reply) {
-      await ctx.reply(`⏳ Running side-by-side speed test (**PNG File** vs **RAM Memory**) on \`${path.basename(resolvedImgPath)}\`...`);
+      await ctx.reply(parts);
     }
-
-    // =========================================================================
-    // TEST 1: OLD PNG FILE METHOD (adb screencap -p > file + PNG decode + match)
-    // =========================================================================
-    const tPngCapStart = Date.now();
-    let pngBuffer: Buffer;
-    try {
-      pngBuffer = await adb.screencap();
-    } catch (err: any) {
-      const msg = `test failed: PNG screencap error (${err.message})`;
-      if (ctx.reply) await ctx.reply(msg);
-      return { success: false, message: msg };
-    }
-    const pngCapMs = Date.now() - tPngCapStart;
-
-    const tPngMatchStart = Date.now();
-    const pngMatch = await TemplateMatcher.match(pngBuffer, resolvedImgPath, {
-      scales,
-      threshold: effectiveThreshold,
-      drawDebugBox: false,
-      region
-    });
-    const pngMatchMs = Date.now() - tPngMatchStart;
-    const pngTotalMs = pngCapMs + pngMatchMs;
-
-    // =========================================================================
-    // TEST 2: NEW RAM MEMORY METHOD (adb screencap raw + RAM slice + cached match)
-    // =========================================================================
-    const tRamCapStart = Date.now();
-    let rawScreen: { data: Buffer; width: number; height: number; headerSize: number };
-    try {
-      rawScreen = await adb.screencapRaw();
-    } catch (err: any) {
-      const msg = `test failed: Raw RAM screencap error (${err.message})`;
-      if (ctx.reply) await ctx.reply(msg);
-      return { success: false, message: msg };
-    }
-    const ramCapMs = Date.now() - tRamCapStart;
-
-    const tRamColdStart = Date.now();
-    await TemplateMatcher.matchRaw(rawScreen, resolvedImgPath, {
-      scales,
-      threshold: effectiveThreshold,
-      region
-    });
-    const ramColdMatchMs = Date.now() - tRamColdStart;
-
-    const tRamWarmStart = Date.now();
-    const ramMatch = await TemplateMatcher.matchRaw(rawScreen, resolvedImgPath, {
-      scales,
-      threshold: effectiveThreshold,
-      region
-    });
-    const ramMatchMs = Date.now() - tRamWarmStart;
-    const ramTotalMs = ramCapMs + ramMatchMs;
-
-    const imgBaseName = path.basename(resolvedImgPath);
-    const pngScorePct = (pngMatch.score * 100).toFixed(1);
-    const ramScorePct = (ramMatch.score * 100).toFixed(1);
-    const regionStr = region
-      ? `X:[${region.minX}..${region.maxX}], Y:[${region.minY}..${region.maxY}]`
-      : `Full Screen (${rawScreen.width}×${rawScreen.height})`;
-
-    const speedup = ramTotalMs > 0 ? (pngTotalMs / ramTotalMs).toFixed(2) : '1.00';
-    const savedMs = pngTotalMs - ramTotalMs;
-
-    const summary = [
-      `⚡ **Speed Test: PNG File vs RAM Memory (\`${imgBaseName}\`)**`,
-      `• **Search Area:** \`${regionStr}\``,
-      ``,
-      `🐢 **1. PNG File Method (Current):** **\`${pngTotalMs} ms\` total**`,
-      `• Screenshot (\`screencap -p\` file): **${pngCapMs} ms**`,
-      `• PNG Decode + Compare: **${pngMatchMs} ms**`,
-      `• Match: **${pngMatch.found ? 'FOUND ✅' : 'NOT FOUND ❌'}** (${pngScorePct}%) at \`(${pngMatch.targetPoint.x}, ${pngMatch.targetPoint.y})\``,
-      ``,
-      `🚀 **2. RAM Memory Method (New):** **\`${ramTotalMs} ms\` total**`,
-      `• Screenshot (Raw RAM buffer): **${ramCapMs} ms**`,
-      `• RAM Slice + Compare: **${ramMatchMs} ms** *(1st cold load: ${ramColdMatchMs} ms)*`,
-      `• Match: **${ramMatch.found ? 'FOUND ✅' : 'NOT FOUND ❌'}** (${ramScorePct}%) at \`(${ramMatch.targetPoint.x}, ${ramMatch.targetPoint.y})\``,
-      ``,
-      `🏆 **Winner:** ${
-        savedMs > 0
-          ? `**RAM Memory is ${speedup}x faster** (saves **${savedMs} ms** per check!)`
-          : `**PNG File was faster by ${Math.abs(savedMs)} ms**`
-      }`
-    ].join('\n');
-
-    ctx.log(
-      `[SpeedTest] PNG: ${pngTotalMs}ms (cap ${pngCapMs}ms + match ${pngMatchMs}ms) | RAM: ${ramTotalMs}ms (cap ${ramCapMs}ms + match ${ramMatchMs}ms)`,
-      'info'
-    );
-    if (ctx.reply) await ctx.reply(summary);
 
     return {
       success: true,
-      message: summary,
-      data: {
-        png: { capMs: pngCapMs, matchMs: pngMatchMs, totalMs: pngTotalMs, score: pngMatch.score },
-        ram: { capMs: ramCapMs, matchMs: ramMatchMs, totalMs: ramTotalMs, score: ramMatch.score, coldMatchMs: ramColdMatchMs }
-      }
+      message: parts,
+      data: { roundtrip, wsPing }
     };
   }
 };
@@ -1363,12 +1135,11 @@ const COMMAND_MANUALS: Record<string, string> = {
     '10. Checks 8-143 1832-1966 for timer; if exists sends "ac is moving", polls every 10s in background until timer disappears, then updates message to "arrived"'
   ].join('\n'),
 
-  test: [
-    '**test** — Test comparing asbtn.png in region 725-800 951-1022 & see click target without tapping',
-    'usage:',
-    '• `test` — captures screen, crops `X:725–800, Y:951–1022`, compares to `asbtn.png` & shows execution time and would-click position',
-    '• `test <image>` — tests custom image from `/sdcard/autoclick/`',
-    '• `test <image> <minX>-<maxX> <minY>-<maxY>` — tests image against custom crop region (e.g. `test btn.png 100-300 400-600`)'
+  ping: [
+    '**ping** — Checks Discord gateway latency and responsiveness',
+    'usage: `ping`',
+    '• Displays roundtrip latency (message response time in ms)',
+    '• Displays WebSocket gateway heartbeat latency in ms'
   ].join('\n'),
 
   find: [
@@ -1565,10 +1336,10 @@ export const helpCommand: CommandDefinition = {
         : 'none yet (use `macro create <name> <steps>`)';
 
     const manualOverview = [
-      '**bot manual** — send `help <command>` for detailed usage (e.g. `help macro`, `help test`, `help find`)',
+      '**bot manual** — send `help <command>` for detailed usage (e.g. `help macro`, `help ping`, `help find`)',
       '• `ai` — Gemini Vision unexpected prompt learner (`help ai`)',
       '• `find` — run automated pfp search, tap & 150×150 center crop sequence',
-      '• `test` — benchmark time taken to capture, crop & compare an image (`help test`)',
+      '• `ping` — check Discord gateway latency and responsiveness (`help ping`)',
       '• `macro` — create & manage custom multi-step commands (`help macro`)',
       '• `tap` — tap exact `X Y` or random `minX-maxX minY-maxY` (`help tap`)',
       '• `hold` — hold / long-press coordinates or random box for duration (`help hold`)',

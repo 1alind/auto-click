@@ -27,7 +27,7 @@ import {
   macroCommand,
   imagesCommand,
   stopCommand,
-  testCommand,
+  pingCommand,
   liveCommand,
   clearCommand,
   buttonsCommand,
@@ -125,7 +125,7 @@ export class BotManager {
     this.discord.registerCommand(macroCommand);
     this.discord.registerCommand(imagesCommand);
     this.discord.registerCommand(stopCommand);
-    this.discord.registerCommand(testCommand);
+    this.discord.registerCommand(pingCommand);
     this.discord.registerCommand(liveCommand);
     this.discord.registerCommand(aiCommand);
     this.discord.registerCommand(moveCommand);
