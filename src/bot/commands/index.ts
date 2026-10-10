@@ -1427,19 +1427,29 @@ export const farmCommand: CommandDefinition = {
 
       // 2. search rssatk.png 727-796 1227-1301
       const rawScreen1 = await adb.screencapRaw();
-      await TemplateMatcher.matchRaw(rawScreen1, rssatkPath, {
+      const matchRssatk = await TemplateMatcher.matchRaw(rawScreen1, rssatkPath, {
         scales: [1.0],
         threshold: config.matchThreshold,
         region: { minX: 727, maxX: 796, minY: 1227, maxY: 1301 }
       });
+      if (matchRssatk.found) {
+        ctx.log(`🚜 Found rssatk, clicking (${matchRssatk.targetPoint.x}, ${matchRssatk.targetPoint.y})`, 'info');
+        await adb.tap(matchRssatk.targetPoint.x, matchRssatk.targetPoint.y);
+        await sleep(500); // Small delay after click
+      }
 
       // 3. search as1.png 230-309 1591-1670
       const rawScreen2 = await adb.screencapRaw();
-      await TemplateMatcher.matchRaw(rawScreen2, as1Path, {
+      const matchAs1 = await TemplateMatcher.matchRaw(rawScreen2, as1Path, {
         scales: [1.0],
         threshold: config.matchThreshold,
         region: { minX: 230, maxX: 309, minY: 1591, maxY: 1670 }
       });
+      if (matchAs1.found) {
+        ctx.log(`🚜 Found as1, clicking (${matchAs1.targetPoint.x}, ${matchAs1.targetPoint.y})`, 'info');
+        await adb.tap(matchAs1.targetPoint.x, matchAs1.targetPoint.y);
+        await sleep(500); // Small delay after click
+      }
 
       // 4. wait 6 seconds
       await sleep(6000);
