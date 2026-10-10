@@ -1374,6 +1374,33 @@ export const farmCommand: CommandDefinition = {
     const config = botManager.getConfig();
 
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const fs = await import('fs');
+    const path = await import('path');
+    const os = await import('os');
+
+    const resolveImagePath = (name: string): string => {
+        const homeDir = process.env.HOME || os.homedir() || '';
+        const sharedDirs = [
+            path.resolve(homeDir, 'storage/shared/autoclick'),
+            '/sdcard/autoclick',
+            '/storage/emulated/0/autoclick'
+        ];
+        for (const dir of sharedDirs) {
+            const candidate = path.join(dir, name);
+            if (fs.existsSync(candidate)) return candidate;
+        }
+        return '';
+    };
+
+    const rssatkPath = resolveImagePath('rssatk.png');
+    const as1Path = resolveImagePath('as1.png');
+
+    if (!rssatkPath || !as1Path) {
+        const err = `Farming images not found: rssatk.png=${rssatkPath}, as1.png=${as1Path}`;
+        ctx.log(err, 'error');
+        if (ctx.reply) await ctx.reply(`-# ❌ ${err}`);
+        return { success: false, message: err };
+    }
 
     const maxIterations = ctx.args.length > 0 ? parseInt(ctx.args[0], 10) : Infinity;
 
@@ -1399,7 +1426,7 @@ export const farmCommand: CommandDefinition = {
 
       // 2. search rssatk.png 727-796 1227-1301
       const rawScreen1 = await adb.screencapRaw();
-      await TemplateMatcher.matchRaw(rawScreen1, 'rssatk.png', {
+      await TemplateMatcher.matchRaw(rawScreen1, rssatkPath, {
         scales: [1.0],
         threshold: config.matchThreshold,
         region: { minX: 727, maxX: 796, minY: 1227, maxY: 1301 }
@@ -1407,7 +1434,7 @@ export const farmCommand: CommandDefinition = {
 
       // 3. search as1.png 230-309 1591-1670
       const rawScreen2 = await adb.screencapRaw();
-      await TemplateMatcher.matchRaw(rawScreen2, 'as1.png', {
+      await TemplateMatcher.matchRaw(rawScreen2, as1Path, {
         scales: [1.0],
         threshold: config.matchThreshold,
         region: { minX: 230, maxX: 309, minY: 1591, maxY: 1670 }
