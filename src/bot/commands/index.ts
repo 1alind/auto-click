@@ -1016,49 +1016,39 @@ export const liveCommand: CommandDefinition = {
 
     if (sub === 'stop' || sub === 'off' || sub === 'close') {
       const status = await LiveController.stopLiveTunnel();
-      const msg = `🛑 **Live Control OFF** (port ${LIVE_PORT} & Cloudflare tunnel closed)`;
+      const msg = '-# live stoped';
       ctx.log(msg, 'info');
       if (ctx.reply) await ctx.reply(msg);
       return { success: true, message: msg, data: status };
     }
 
     if (sub !== 'local' && sub !== 'net' && sub !== 'all') {
-      const usageMsg = 'usage: `live local` | `live net` | `live all` | `live stop`';
+      const usageMsg = '-# usage: live local | live net | live all | live stop';
       if (ctx.reply) await ctx.reply(usageMsg);
       return { success: false, message: usageMsg };
     }
 
     const mode: 'local' | 'net' | 'all' = sub;
-
-    if (ctx.reply) {
-      const modeLabel =
-        mode === 'local' ? 'Local Wi-Fi Only' : mode === 'net' ? 'Internet Only' : 'Local Wi-Fi + Internet';
-      await ctx.reply(`⏳ Stopping local scripts & starting Live Control (**${modeLabel}**, port ${LIVE_PORT})...`);
-    }
-
     const status = await LiveController.startLiveTunnel(LIVE_PORT, (m) => ctx.log(m, 'info'), mode);
 
+    const ipPort = status.localUrl ? status.localUrl.replace(/^https?:\/\//, '') : '';
     const lines: string[] = [];
+
     if (mode === 'local') {
-      lines.push(`🟢 **Live Control Active — Local Wi-Fi Only (Port ${LIVE_PORT})** *(all local scripts stopped)*`);
-      lines.push(`• **Local Wi-Fi:** ${status.localUrl}`);
+      lines.push('-# live local started');
+      if (ipPort) lines.push(`-# ${ipPort}`);
     } else if (mode === 'net') {
-      lines.push(`🟢 **Live Control Active — Internet Only** *(all local scripts stopped, fast compressed stream)*`);
-      lines.push(
-        status.publicUrl
-          ? `• **Internet (Anywhere):** ${status.publicUrl}`
-          : `• **Internet Tunnel:** unavailable (${status.error || 'check cloudflared'})`
-      );
+      lines.push('-# live net started');
+      if (status.publicUrl) {
+        lines.push(`-# ${status.publicUrl}`);
+      } else if (status.error) {
+        lines.push(`-# error: ${status.error}`);
+      }
     } else {
-      lines.push(`🟢 **Live Control Active — Local Wi-Fi + Internet (Port ${LIVE_PORT})** *(all local scripts stopped)*`);
-      lines.push(`• **Local Wi-Fi:** ${status.localUrl}`);
-      lines.push(
-        status.publicUrl
-          ? `• **Internet (Anywhere):** ${status.publicUrl}`
-          : `• **Internet Tunnel:** unavailable (${status.error || 'check cloudflared'})`
-      );
+      lines.push('-# live all started');
+      if (ipPort) lines.push(`-# ${ipPort}`);
+      if (status.publicUrl) lines.push(`-# ${status.publicUrl}`);
     }
-    lines.push(`*(send \`live stop\` when finished to shut down)*`);
 
     const msg = lines.join('\n');
     ctx.log(msg, 'info');

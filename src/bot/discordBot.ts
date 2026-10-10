@@ -319,11 +319,7 @@ export class DiscordBotClient {
 
       this.log(`🧹 Found ${toDelete.size} message(s) to remove in main channel #${textChannel.name || ''} (${textChannel.id})`, 'info');
 
-      // Send a temporary notice to Discord as requested
       let tempNotice: any = null;
-      try {
-        tempNotice = await textChannel.send(`-# 🧹 Removing ${toDelete.size} message(s) from channel (5s delay between messages)...`);
-      } catch {}
 
       let deletedCount = 0;
       for (const msg of toDelete.values()) {
