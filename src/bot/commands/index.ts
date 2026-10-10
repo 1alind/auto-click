@@ -1382,6 +1382,7 @@ export const farmCommand: CommandDefinition = {
         const homeDir = process.env.HOME || os.homedir() || '';
         const sharedDirs = [
             path.resolve(homeDir, 'storage/shared/autoclick'),
+            path.join(os.homedir(), 'storage', 'shared', 'autoclick'),
             '/sdcard/autoclick',
             '/storage/emulated/0/autoclick'
         ];
