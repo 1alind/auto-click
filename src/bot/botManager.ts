@@ -31,7 +31,8 @@ import {
   liveCommand,
   clearCommand,
   buttonsCommand,
-  cleanupCommand
+  cleanupCommand,
+  farmCommand
 } from './commands/index';
 import { RefImageManager } from './refImage';
 import { CrashHandler } from './crashHandler';
@@ -132,6 +133,7 @@ export class BotManager {
     this.discord.registerCommand(clearCommand);
     this.discord.registerCommand(buttonsCommand);
     this.discord.registerCommand(cleanupCommand);
+    this.discord.registerCommand(farmCommand);
 
     // Load and register all saved custom macros as direct commands (e.g. "start")
     import('./macroManager').then(({ MacroManager }) => {

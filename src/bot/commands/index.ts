@@ -1143,6 +1143,16 @@ const COMMAND_MANUALS: Record<string, string> = {
     '6. Captures screenshot, crops 150×150 center, and updates the Discord webhook message'
   ].join('\n'),
 
+  farm: [
+    '**farm** — Farming loop',
+    'usage: `farm [turns]`',
+    '1. Taps X=530–549, Y=1190–1209',
+    '2. Searches `rssatk.png` in X=727–796, Y=1227–1301',
+    '3. Searches `as1.png` in X=230–309, Y=1591–1670',
+    '4. Waits 6 seconds, then repeats.',
+    '• Optional: Provide `<turns>` to stop automatically after that many iterations.'
+  ].join('\n'),
+
   macro: [
     '**macro** — Create & edit custom commands that run directly by name',
     'subcommands:',
@@ -1329,6 +1339,7 @@ export const helpCommand: CommandDefinition = {
       '**bot manual** — send `help <command>` for detailed usage (e.g. `help macro`, `help ping`, `help find`)',
       '• `ai` — Gemini Vision unexpected prompt learner (`help ai`)',
       '• `find` — run automated pfp search, tap & 150×150 center crop sequence',
+      '• `farm [turns]` — farming loop: tap, search rssatk, search as1, wait',
       '• `ping` — check Discord gateway latency and responsiveness (`help ping`)',
       '• `macro` — create & manage custom multi-step commands (`help macro`)',
       '• `tap` — tap exact `X Y` or random `minX-maxX minY-maxY` (`help tap`)',
@@ -1349,3 +1360,66 @@ export const helpCommand: CommandDefinition = {
 };
 
 export { clearCommand } from './clear';
+
+export const farmCommand: CommandDefinition = {
+  name: 'farm',
+  description: 'Farming loop: tap, search rssatk, search as1, wait.',
+  usage: 'farm [turns]',
+
+  execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const { botManager } = await import('../botManager');
+    const { TemplateMatcher } = await import('../matcher');
+    const { MacroManager } = await import('../macroManager');
+    const adb = botManager.getAdbController();
+    const config = botManager.getConfig();
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const maxIterations = ctx.args.length > 0 ? parseInt(ctx.args[0], 10) : Infinity;
+
+    // Register as running
+    // @ts-ignore
+    MacroManager.runningMacroName = 'farm';
+
+    ctx.log(`🚜 Starting farming loop... (limit: ${maxIterations === Infinity ? 'unlimited' : maxIterations} turns)`, 'info');
+    if (ctx.reply) await ctx.reply(`-# 🚜 Farming started (limit: ${maxIterations === Infinity ? 'unlimited' : maxIterations} turns)`);
+
+    let iterations = 0;
+    while (MacroManager.getRunningMacro() === 'farm') {
+      if (maxIterations !== Infinity && iterations >= maxIterations) {
+        ctx.log('🚜 Farming limit reached.', 'info');
+        break;
+      }
+      iterations++;
+      ctx.log(`🚜 Farming iteration ${iterations}/${maxIterations === Infinity ? '∞' : maxIterations}`, 'info');
+
+      // 1. tap 530-549 1190-1209
+      await adb.tapRandomRange(530, 549, 1190, 1209);
+      await sleep(1000); // Small delay after tap
+
+      // 2. search rssatk.png 727-796 1227-1301
+      const rawScreen1 = await adb.screencapRaw();
+      await TemplateMatcher.matchRaw(rawScreen1, 'rssatk.png', {
+        scales: [1.0],
+        threshold: config.matchThreshold,
+        region: { minX: 727, maxX: 796, minY: 1227, maxY: 1301 }
+      });
+
+      // 3. search as1.png 230-309 1591-1670
+      const rawScreen2 = await adb.screencapRaw();
+      await TemplateMatcher.matchRaw(rawScreen2, 'as1.png', {
+        scales: [1.0],
+        threshold: config.matchThreshold,
+        region: { minX: 230, maxX: 309, minY: 1591, maxY: 1670 }
+      });
+
+      // 4. wait 6 seconds
+      await sleep(6000);
+    }
+
+    // @ts-ignore
+    MacroManager.runningMacroName = null;
+    ctx.log('🚜 Farming stopped.', 'info');
+    return { success: true, message: 'Farming stopped' };
+  }
+};
