@@ -333,6 +333,7 @@ export class MacroManager {
     const targetName = this.runningMacroName;
     if (!targetName) return null;
     this.stopRequestedForRunId = this.activeRunId;
+    this.runningMacroName = null; // Ensure loop terminates
     return targetName;
   }
 
