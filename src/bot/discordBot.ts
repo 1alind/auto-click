@@ -653,14 +653,26 @@ export class DiscordBotClient {
       clearInterval(this.watchdogTimer);
       this.watchdogTimer = null;
     }
+    try {
+      const { MacroManager } = await import('./macroManager');
+      const { stopHold, stopFarm } = await import('./commands/index');
+      const { stopSub } = await import('./commands/sub');
+      MacroManager.stopAll();
+      stopHold();
+      stopFarm();
+      stopSub();
+      const { botManager } = await import('./botManager');
+      await botManager.getAdbController().stopAllTaps();
+    } catch {}
+
     this.connectionPromise = null;
     if (this.client) {
       try {
         await this.client.destroy();
         this.client = null;
         ConsoleLogger.stopped();
-        this.log('🛑 Discord Bot disconnected gracefully.', 'info');
-        return { success: true, message: 'Discord bot disconnected.' };
+        this.log('🛑 Discord Bot disconnected gracefully and all taps disabled.', 'info');
+        return { success: true, message: 'Discord bot disconnected and all taps disabled.' };
       } catch (err: any) {
         ConsoleLogger.error(err, 'discord stop');
         return { success: false, message: err.message };

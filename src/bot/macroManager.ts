@@ -331,10 +331,20 @@ export class MacroManager {
 
   public static stopAll(): string | null {
     const targetName = this.runningMacroName;
-    if (!targetName) return null;
     this.stopRequestedForRunId = this.activeRunId;
     this.runningMacroName = null; // Ensure loop terminates
+    if (this.liveStatusInterval) {
+      clearInterval(this.liveStatusInterval);
+      this.liveStatusInterval = null;
+    }
+    const waiters = [...this.cycleStopWaiters];
+    this.cycleStopWaiters = [];
+    for (const resolve of waiters) resolve();
     return targetName;
+  }
+
+  public static setRunningMacro(name: string | null): void {
+    this.runningMacroName = name;
   }
 
   private static async notifyCycleStopped(): Promise<void> {

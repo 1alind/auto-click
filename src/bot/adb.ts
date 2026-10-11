@@ -35,10 +35,17 @@ export class AdbController {
   private tapChain: Promise<any> = Promise.resolve();
   private lastTapFinishedAt: number = 0;
   private lastTapCoords: { x: number; y: number } | null = null;
+  private activeInputAbortController: AbortController | null = null;
+  private isHolding = false;
+  private holdStopRequested = false;
 
   constructor(options?: { serial?: string; host?: string }) {
     if (options?.serial) this.serial = AdbController.normalizeHost(options.serial);
     if (options?.host) this.host = AdbController.normalizeHost(options.host);
+  }
+
+  public isHoldActive(): boolean {
+    return this.isHolding;
   }
 
   public stopAutoConnect(): boolean {
@@ -553,25 +560,109 @@ export class AdbController {
   }
 
   /**
+   * Immediately aborts any ongoing swipe/hold/tap commands in Node,
+   * kills any running input processes on the Android device via ADB,
+   * forces a touch release/cancel so no fingers stay stuck on the screen,
+   * and clears the local tap chain queue.
+   */
+  public async stopAllTaps(): Promise<{ success: boolean; message: string }> {
+    this.holdStopRequested = true;
+    this.isHolding = false;
+
+    // 1. Abort locally running child process if any
+    if (this.activeInputAbortController) {
+      try {
+        this.activeInputAbortController.abort();
+      } catch {}
+      this.activeInputAbortController = null;
+    }
+
+    // 2. Clear tapChain so subsequent ADB actions aren't blocked
+    this.tapChain = Promise.resolve();
+
+    // 3. Send force-kill and touch release commands to Android device
+    try {
+      const isAdb = await this.isAdbAvailable();
+      if (isAdb) {
+        let adbTarget = await this.resolveTargetFlag().catch(() => '');
+        // Kill all running input processes on Android device
+        const killCmd = `adb ${adbTarget} shell "killall -9 input 2>/dev/null; pkill -9 -f 'input' 2>/dev/null; pkill -9 -f 'com.android.commands.input' 2>/dev/null; pkill -9 -f 'app_process.*input' 2>/dev/null || true"`;
+        await execPromise(killCmd).catch(() => {});
+
+        // Cancel and release any lingering touch events
+        const releaseCmd = `adb ${adbTarget} shell "input motionevent UP 0 0 >/dev/null 2>&1; input motionevent CANCEL 0 0 >/dev/null 2>&1; input swipe 0 0 0 0 10 >/dev/null 2>&1 || true"`;
+        await execPromise(releaseCmd).catch(() => {});
+      }
+    } catch {}
+
+    this.lastTapFinishedAt = Date.now();
+    return { success: true, message: 'All taps stopped and screen touches released' };
+  }
+
+  /**
+   * Releases any stuck touch points at (x, y) or default (0, 0).
+   */
+  public async releaseTouch(x = 0, y = 0): Promise<void> {
+    try {
+      const rx = Math.round(x);
+      const ry = Math.round(y);
+      let adbTarget = await this.resolveTargetFlag().catch(() => '');
+      const releaseCmd = `adb ${adbTarget} shell "input motionevent UP ${rx} ${ry} >/dev/null 2>&1; input motionevent CANCEL ${rx} ${ry} >/dev/null 2>&1; input swipe ${rx} ${ry} ${rx} ${ry} 10 >/dev/null 2>&1 || true"`;
+      await execPromise(releaseCmd).catch(() => {});
+    } catch {}
+  }
+
+  /**
    * Performs a long press / hold at coordinates (x, y) for durationMs.
-   * On Android, swiping from (x, y) to (x, y) with duration is the standard ADB hold command.
+   * Chunks long hold durations into 4-second slices so Android does not timeout
+   * or hang, and allows immediate interruption when stop is requested.
    */
   public async hold(
     x: number,
     y: number,
-    durationMs: number = 1000
+    durationMs: number = 1000,
+    checkCancelled?: () => boolean
   ): Promise<TapResult> {
     const rx = Math.round(x);
     const ry = Math.round(y);
-    const dur = Math.max(100, Math.round(durationMs));
-    await this.swipe(rx, ry, rx, ry, dur);
+    const totalMs = Math.max(100, Math.round(durationMs));
+    this.isHolding = true;
+    this.holdStopRequested = false;
+
+    // Slice hold into chunks of at most 4000ms each so Android OS doesn't drop/time out the command,
+    // and so cancellation can happen quickly and reliably.
+    const CHUNK_MS = 4000;
+    let remainingMs = totalMs;
+    let elapsedMs = 0;
+
+    try {
+      while (remainingMs > 0) {
+        if (this.holdStopRequested || (checkCancelled && checkCancelled())) {
+          break;
+        }
+
+        const sliceDur = Math.min(remainingMs, CHUNK_MS);
+        await this.swipe(rx, ry, rx, ry, sliceDur);
+        elapsedMs += sliceDur;
+        remainingMs -= sliceDur;
+
+        if (this.holdStopRequested || (checkCancelled && checkCancelled())) {
+          break;
+        }
+      }
+    } finally {
+      this.isHolding = false;
+      // Guarantee touch release after hold ends or is interrupted
+      await this.releaseTouch(rx, ry).catch(() => {});
+    }
+
     return {
       x: rx,
       y: ry,
-      command: `swipe ${rx} ${ry} ${rx} ${ry} ${dur}`,
-      success: true,
-      output: `hold (${rx}, ${ry}) for ${dur}ms`,
-      durationMs: dur
+      command: `swipe ${rx} ${ry} ${rx} ${ry} ${elapsedMs}`,
+      success: !this.holdStopRequested,
+      output: `hold (${rx}, ${ry}) for ${elapsedMs}ms`,
+      durationMs: elapsedMs
     };
   }
 
@@ -583,7 +674,8 @@ export class AdbController {
     maxX: number,
     minY: number,
     maxY: number,
-    durationMs: number = 1000
+    durationMs: number = 1000,
+    checkCancelled?: () => boolean
   ): Promise<TapResult> {
     const lowX = Math.min(minX, maxX);
     const highX = Math.max(minX, maxX);
@@ -591,7 +683,7 @@ export class AdbController {
     const highY = Math.max(minY, maxY);
     const randomX = Math.floor(lowX + Math.random() * (highX - lowX + 1));
     const randomY = Math.floor(lowY + Math.random() * (highY - lowY + 1));
-    const result = await this.hold(randomX, randomY, durationMs);
+    const result = await this.hold(randomX, randomY, durationMs, checkCancelled);
     return {
       ...result,
       minX: lowX,
@@ -604,6 +696,7 @@ export class AdbController {
   /**
    * Swipes from (x1, y1) to (x2, y2) over durationMs via standard ADB shell.
    * Serialized through tapChain and cleans up any lingering touch state after completion.
+   * Can be aborted cleanly via AbortController.
    */
   public async swipe(
     x1: number,
@@ -613,6 +706,10 @@ export class AdbController {
     durationMs = 300
   ): Promise<{ success: boolean; command: string; output: string }> {
     const runSwipe = async () => {
+      if (this.holdStopRequested) {
+        return { success: false, command: 'swipe aborted', output: 'aborted' };
+      }
+
       const rx1 = Math.round(x1);
       const ry1 = Math.round(y1);
       const rx2 = Math.round(x2);
@@ -632,27 +729,66 @@ export class AdbController {
       let adbTarget = await this.resolveTargetFlag();
       const swipeCmd = `adb ${adbTarget} shell input swipe ${rx1} ${ry1} ${rx2} ${ry2} ${dur}`;
 
+      const controller = new AbortController();
+      this.activeInputAbortController = controller;
+
       try {
-        const { stdout } = await execPromise(swipeCmd);
+        const { stdout } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+          exec(swipeCmd, { signal: controller.signal }, (err, stdout, stderr) => {
+            if (err) return reject(err);
+            resolve({ stdout: String(stdout), stderr: String(stderr) });
+          });
+        });
         this.lastTapFinishedAt = Date.now();
         return {
           success: true,
           command: swipeCmd,
           output: stdout.trim()
         };
-      } catch {
+      } catch (err: any) {
+        if (err.name === 'AbortError' || this.holdStopRequested) {
+          return {
+            success: false,
+            command: swipeCmd,
+            output: 'aborted'
+          };
+        }
+
         adbTarget = await this.resolveTargetFlag(true);
         if (!adbTarget) {
           throw new Error('no adb device connected (run: connect <port>)');
         }
         const retrySwipeCmd = `adb ${adbTarget} shell input swipe ${rx1} ${ry1} ${rx2} ${ry2} ${dur}`;
-        const { stdout } = await execPromise(retrySwipeCmd);
-        this.lastTapFinishedAt = Date.now();
-        return {
-          success: true,
-          command: retrySwipeCmd,
-          output: stdout.trim()
-        };
+        const retryController = new AbortController();
+        this.activeInputAbortController = retryController;
+
+        try {
+          const { stdout } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+            exec(retrySwipeCmd, { signal: retryController.signal }, (err, stdout, stderr) => {
+              if (err) return reject(err);
+              resolve({ stdout: String(stdout), stderr: String(stderr) });
+            });
+          });
+          this.lastTapFinishedAt = Date.now();
+          return {
+            success: true,
+            command: retrySwipeCmd,
+            output: stdout.trim()
+          };
+        } catch (retryErr: any) {
+          if (retryErr.name === 'AbortError' || this.holdStopRequested) {
+            return {
+              success: false,
+              command: retrySwipeCmd,
+              output: 'aborted'
+            };
+          }
+          throw retryErr;
+        }
+      } finally {
+        if (this.activeInputAbortController === controller) {
+          this.activeInputAbortController = null;
+        }
       }
     };
 

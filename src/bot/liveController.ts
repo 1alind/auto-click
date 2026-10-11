@@ -1214,11 +1214,19 @@ export class LiveController {
 
   public static async stopAllLocalScriptsForLive(logFn?: (msg: string) => void): Promise<string | null> {
     const { stopSub, getRunningSubOption } = await import('./commands/sub');
+    const { stopHold, stopFarm } = await import('./commands/index');
+    const { botManager } = await import('./botManager');
+    const adb = botManager.getAdbController();
+
     const subOpt = getRunningSubOption();
     if (subOpt) {
       logFn?.(`🛑 Stopping running "sub ${subOpt}" before starting Live Control...`);
       stopSub();
     }
+    stopHold();
+    stopFarm();
+    await adb.stopAllTaps();
+
     if (MacroManager.isFindRunning()) {
       logFn?.('⏳ Waiting for "find" to finish before starting Live Control...');
       await MacroManager.waitForFind();

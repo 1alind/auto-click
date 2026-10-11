@@ -78,6 +78,19 @@ export const tapCommand: CommandDefinition = {
   }
 };
 
+let holdRunning = false;
+let holdStopRequested = false;
+
+export function isHoldRunning(): boolean {
+  return holdRunning;
+}
+
+export function stopHold(): boolean {
+  if (!holdRunning) return false;
+  holdStopRequested = true;
+  return true;
+}
+
 export const holdCommand: CommandDefinition = {
   name: 'hold',
   description: 'Holds coordinates or range on device for a duration specified in minutes.',
@@ -86,6 +99,7 @@ export const holdCommand: CommandDefinition = {
 
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
     const { botManager } = await import('../botManager');
+    const { MacroManager } = await import('../macroManager');
     const adb = botManager.getAdbController();
 
     if (ctx.args.length < 3) {
@@ -154,18 +168,35 @@ export const holdCommand: CommandDefinition = {
     const targetDesc = isRange ? `${argX} ${argY}` : `(${minX}, ${minY})`;
     const minDesc = durationMinutes >= 1 ? `${durationMinutes} minute(s)` : `${Math.round(durationMs / 1000)}s`;
 
-    const startMsg = `-# ⏱️ holding ${targetDesc} for ${minDesc}...`;
+    holdRunning = true;
+    holdStopRequested = false;
+    MacroManager.setRunningMacro('hold');
+
+    const startMsg = `-# ⏱️ holding ${targetDesc} for ${minDesc}... (send "stop" to cancel)`;
     ctx.log(startMsg, 'info');
     if (ctx.reply) await ctx.reply(startMsg);
 
+    const checkCancelled = () => holdStopRequested || MacroManager.getRunningMacro() !== 'hold';
+
     let result;
-    if (isRange) {
-      result = await adb.holdRandomRange(minX, maxX, minY, maxY, durationMs);
-    } else {
-      result = await adb.hold(minX, minY, durationMs);
+    try {
+      if (isRange) {
+        result = await adb.holdRandomRange(minX, maxX, minY, maxY, durationMs, checkCancelled);
+      } else {
+        result = await adb.hold(minX, minY, durationMs, checkCancelled);
+      }
+    } finally {
+      holdRunning = false;
+      if (MacroManager.getRunningMacro() === 'hold') {
+        MacroManager.setRunningMacro(null);
+      }
     }
 
-    const finishMsg = `-# ✅ held (${result.x}, ${result.y}) for ${minDesc}`;
+    const stoppedEarly = holdStopRequested || !result.success || (result.durationMs && result.durationMs < durationMs - 500);
+    const finishMsg = stoppedEarly
+      ? `-# 🛑 held (${result.x}, ${result.y}) stopped early and touches released (${result.durationMs ? Math.round(result.durationMs / 1000) + 's' : 'cancelled'})`
+      : `-# ✅ held (${result.x}, ${result.y}) for ${minDesc}`;
+
     ctx.log(finishMsg, 'info');
     if (ctx.reply) await ctx.reply(finishMsg);
 
@@ -856,45 +887,55 @@ export const macroCommand: CommandDefinition = {
 
 export const stopCommand: CommandDefinition = {
   name: 'stop',
-  description: 'Stops any currently running macro (before step 1) or stops ADB auto-connect retries.',
+  description: 'Stops all macros, farm, hold, sub, and auto-connect, and immediately disables all taps and releases screen touch.',
   usage: 'stop',
 
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
     const { MacroManager } = await import('../macroManager');
     const { botManager } = await import('../botManager');
     const { stopSub, getRunningSubOption } = await import('./sub');
+    const { stopHold } = await import('./index');
+    const { stopFarm } = await import('./index');
     const adb = botManager.getAdbController();
 
+    // 1. Signal stop to all running routines
     const stoppedAutoConnect = adb.stopAutoConnect();
     const subOpt = getRunningSubOption();
     const stoppedSub = stopSub();
+    const stoppedHold = stopHold();
+    const stoppedFarm = stopFarm();
 
-    if (MacroManager.isFindRunning()) {
-      await MacroManager.waitForFind();
-    }
     const runningName = MacroManager.getRunningMacro();
     if (runningName) {
       MacroManager.stopAll();
-      const stopTargetDesc =
-        runningName.toLowerCase() === 'start' ? 'before step 1, 7, or 13' : 'before step 1';
-      const msg = stoppedAutoConnect
-        ? `stopped adb auto-connect & stopping ${runningName} right ${stopTargetDesc}...`
-        : `stopping ${runningName} right ${stopTargetDesc}...`;
-      if (ctx.reply) await ctx.reply(msg);
-      return { success: true, message: msg };
     }
 
-    if (stoppedSub) {
-      const msg = `stopping \`sub ${subOpt}\`...`;
-      if (ctx.reply) await ctx.reply(msg);
-      return { success: true, message: msg };
+    // 2. Immediately abort active ADB processes, kill input on device, and release touches
+    await adb.stopAllTaps();
+
+    // 3. Collect everything that was stopped
+    const stoppedItems: string[] = [];
+    if (runningName) {
+      if (runningName.toLowerCase() === 'start') {
+        stoppedItems.push('start (before step 1, 7, or 13)');
+      } else {
+        stoppedItems.push(runningName);
+      }
+    }
+    if (stoppedHold || runningName === 'hold') stoppedItems.push('hold');
+    if (stoppedFarm || runningName === 'farm') stoppedItems.push('farm');
+    if (stoppedSub) stoppedItems.push(`sub ${subOpt}`);
+    if (stoppedAutoConnect) stoppedItems.push('adb auto-connect');
+
+    let msg: string;
+    if (stoppedItems.length > 0) {
+      const unique = Array.from(new Set(stoppedItems));
+      msg = `-# 🛑 stopped ${unique.join(', ')} & disabled all taps`;
+    } else {
+      msg = `-# 🛑 disabled all taps & released touch (nothing was running)`;
     }
 
-    if (stoppedAutoConnect) {
-      return { success: true, message: 'stopped adb auto-connect' };
-    }
-
-    const msg = 'nothing running';
+    ctx.log(msg, 'info');
     if (ctx.reply) await ctx.reply(msg);
     return { success: true, message: msg };
   }
@@ -1361,15 +1402,29 @@ export const helpCommand: CommandDefinition = {
 
 export { clearCommand } from './clear';
 
+let farmRunning = false;
+let farmStopRequested = false;
+
+export function isFarmRunning(): boolean {
+  return farmRunning;
+}
+
+export function stopFarm(): boolean {
+  if (!farmRunning) return false;
+  farmStopRequested = true;
+  return true;
+}
+
 export const farmCommand: CommandDefinition = {
   name: 'farm',
-  description: 'Farming loop: tap, search rssatk, search as1, wait.',
+  description: 'Farming loop: tap resource tile, search rssatk, search as1, wait.',
   usage: 'farm [turns]',
 
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
     const { botManager } = await import('../botManager');
     const { TemplateMatcher } = await import('../matcher');
     const { MacroManager } = await import('../macroManager');
+    const { StoragePaths } = await import('../storagePaths');
     const adb = botManager.getAdbController();
     const config = botManager.getConfig();
 
@@ -1378,86 +1433,193 @@ export const farmCommand: CommandDefinition = {
     const path = await import('path');
     const os = await import('os');
 
-    const resolveImagePath = (name: string): string => {
-        const homeDir = process.env.HOME || os.homedir() || '';
-        const sharedDirs = [
-            path.resolve(homeDir, 'storage/shared/autoclick'),
-            path.join(os.homedir(), 'storage', 'shared', 'autoclick'),
-            '/sdcard/autoclick',
-            '/storage/emulated/0/autoclick'
-        ];
-        for (const dir of sharedDirs) {
-            const candidate = path.join(dir, name);
-            if (fs.existsSync(candidate)) return candidate;
+    const resolveFarmingImage = (name: string): string | null => {
+      // 1. Check StoragePaths resolveImage
+      const direct = StoragePaths.resolveImage(name);
+      if (direct && fs.existsSync(direct)) return direct;
+
+      const clean = name.replace(/\.(png|jpe?g|webp)$/i, '');
+      for (const ext of ['.png', '.jpg', '.jpeg', '.webp']) {
+        const cand = StoragePaths.resolveImage(`${clean}${ext}`);
+        if (cand && fs.existsSync(cand)) return cand;
+      }
+
+      // 2. Check candidate directories directly
+      const homeDir = process.env.HOME || os.homedir() || '';
+      const candidateDirs = [
+        StoragePaths.getImagesDir(),
+        StoragePaths.getBaseDir(),
+        path.join(StoragePaths.getBaseDir(), 'images'),
+        path.resolve(homeDir, 'storage/shared/autoclick/images'),
+        path.resolve(homeDir, 'storage/shared/autoclick'),
+        path.join(os.homedir(), 'storage', 'shared', 'autoclick', 'images'),
+        path.join(os.homedir(), 'storage', 'shared', 'autoclick'),
+        '/sdcard/autoclick/images',
+        '/sdcard/autoclick',
+        '/storage/emulated/0/autoclick/images',
+        '/storage/emulated/0/autoclick',
+        path.resolve(process.cwd(), 'data/autoclick/images'),
+        path.resolve(process.cwd(), 'data/autoclick'),
+        process.cwd()
+      ];
+
+      for (const dir of candidateDirs) {
+        if (!fs.existsSync(dir)) continue;
+        for (const variant of [name, `${clean}.png`, `${clean}.jpg`, `${clean}.jpeg`]) {
+          const candidate = path.join(dir, variant);
+          if (fs.existsSync(candidate)) return candidate;
         }
-        return '';
+      }
+
+      return null;
     };
 
-    const rssatkPath = resolveImagePath('rssatk.png');
-    const as1Path = resolveImagePath('as1.png');
+    const rssatkPath = resolveFarmingImage('rssatk');
+    const as1Path = resolveFarmingImage('as1');
 
     if (!rssatkPath || !as1Path) {
-        const err = `Farming images not found: rssatk.png=${rssatkPath}, as1.png=${as1Path}`;
-        ctx.log(err, 'error');
-        if (ctx.reply) await ctx.reply(`-# ❌ ${err}`);
-        return { success: false, message: err };
+      const missingList: string[] = [];
+      if (!rssatkPath) missingList.push('rssatk.png');
+      if (!as1Path) missingList.push('as1.png');
+      const err = `Farming images not found: ${missingList.join(', ')}. Please save them to /sdcard/autoclick/images/ (or data/autoclick/images/).`;
+      ctx.log(err, 'error');
+      if (ctx.reply) await ctx.reply(`-# ❌ ${err}`);
+      return { success: false, message: err };
     }
 
     const maxIterations = ctx.args.length > 0 ? parseInt(ctx.args[0], 10) : Infinity;
 
-    // Register as running
-    // @ts-ignore
-    MacroManager.runningMacroName = 'farm';
+    farmRunning = true;
+    farmStopRequested = false;
+    MacroManager.setRunningMacro('farm');
 
-    ctx.log(`🚜 Starting farming loop... (limit: ${maxIterations === Infinity ? 'unlimited' : maxIterations} turns)`, 'info');
+    ctx.log(`🚜 Starting farming loop... (limit: ${maxIterations === Infinity ? 'unlimited' : maxIterations} turns, send "stop" to halt)`, 'info');
     if (ctx.reply) await ctx.reply(`-# 🚜 Farming started (limit: ${maxIterations === Infinity ? 'unlimited' : maxIterations} turns)`);
 
-    let iterations = 0;
-    while (MacroManager.getRunningMacro() === 'farm') {
-      if (maxIterations !== Infinity && iterations >= maxIterations) {
-        ctx.log('🚜 Farming limit reached.', 'info');
-        break;
+    const interruptibleWait = async (totalMs: number): Promise<boolean> => {
+      const start = Date.now();
+      while (Date.now() - start < totalMs) {
+        if (farmStopRequested || MacroManager.getRunningMacro() !== 'farm') {
+          return false;
+        }
+        await sleep(Math.min(100, totalMs - (Date.now() - start)));
       }
-      iterations++;
-      ctx.log(`🚜 Farming iteration ${iterations}/${maxIterations === Infinity ? '∞' : maxIterations}`, 'info');
+      return !farmStopRequested && MacroManager.getRunningMacro() === 'farm';
+    };
 
-      // 1. tap 530-549 1190-1209
-      await adb.tapRandomRange(530, 549, 1190, 1209);
-      await sleep(1000); // Small delay after tap
+    const thresh = Math.min(config.matchThreshold || 0.75, 0.80);
 
-      // 2. search rssatk.png 727-796 1227-1301
-      const rawScreen1 = await adb.screencapRaw();
-      const matchRssatk = await TemplateMatcher.matchRaw(rawScreen1, rssatkPath, {
-        scales: [1.0],
-        threshold: 0.95,
-        region: { minX: 727, maxX: 796, minY: 1227, maxY: 1301 }
-      });
-      if (matchRssatk.found) {
-        ctx.log(`🚜 Found rssatk, clicking (${matchRssatk.targetPoint.x}, ${matchRssatk.targetPoint.y})`, 'info');
-        await adb.tap(matchRssatk.targetPoint.x, matchRssatk.targetPoint.y);
-        await sleep(500); // Small delay after click
+    try {
+      let iterations = 0;
+      while (!farmStopRequested && MacroManager.getRunningMacro() === 'farm') {
+        if (maxIterations !== Infinity && iterations >= maxIterations) {
+          ctx.log('🚜 Farming limit reached.', 'info');
+          break;
+        }
+        iterations++;
+        ctx.log(`🚜 Farming iteration ${iterations}/${maxIterations === Infinity ? '∞' : maxIterations}`, 'info');
+
+        // 1. Tap resource tile: 530-549, 1190-1209
+        await adb.tapRandomRange(530, 549, 1190, 1209);
+        if (!(await interruptibleWait(850))) break;
+
+        // 2. Search rssatk.png (retry up to 3 times to accommodate popup open animation)
+        let foundRssatk = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (farmStopRequested || MacroManager.getRunningMacro() !== 'farm') break;
+
+          const rawScreen1 = await adb.screencapRaw().catch(() => null);
+          if (!rawScreen1) {
+            await interruptibleWait(300);
+            continue;
+          }
+
+          // Search primary region first (680-850, 1180-1350)
+          let matchRssatk = await TemplateMatcher.matchRaw(rawScreen1, rssatkPath, {
+            scales: [1.0, 0.95, 1.05],
+            threshold: thresh,
+            region: { minX: 680, maxX: 850, minY: 1180, maxY: 1350 }
+          }).catch(() => null);
+
+          // Fallback to full screen if not detected in region
+          if (!matchRssatk || !matchRssatk.found) {
+            matchRssatk = await TemplateMatcher.matchRaw(rawScreen1, rssatkPath, {
+              scales: [1.0, 0.95, 1.05],
+              threshold: thresh
+            }).catch(() => null);
+          }
+
+          if (matchRssatk && matchRssatk.found) {
+            ctx.log(`🚜 Found rssatk, clicking (${matchRssatk.targetPoint.x}, ${matchRssatk.targetPoint.y})`, 'info');
+            await adb.tap(matchRssatk.targetPoint.x, matchRssatk.targetPoint.y);
+            foundRssatk = true;
+            break;
+          }
+
+          await interruptibleWait(350);
+        }
+
+        if (!foundRssatk) {
+          ctx.log('🚜 rssatk not detected on screen, retrying next loop', 'warn');
+          if (!(await interruptibleWait(2000))) break;
+          continue;
+        }
+
+        // Wait for attack / march window to open
+        if (!(await interruptibleWait(800))) break;
+
+        // 3. Search as1.png (retry up to 3 times to accommodate troop selection menu)
+        let foundAs1 = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (farmStopRequested || MacroManager.getRunningMacro() !== 'farm') break;
+
+          const rawScreen2 = await adb.screencapRaw().catch(() => null);
+          if (!rawScreen2) {
+            await interruptibleWait(300);
+            continue;
+          }
+
+          // Search primary region (200-340, 1560-1730)
+          let matchAs1 = await TemplateMatcher.matchRaw(rawScreen2, as1Path, {
+            scales: [1.0, 0.95, 1.05],
+            threshold: thresh,
+            region: { minX: 200, maxX: 340, minY: 1560, maxY: 1730 }
+          }).catch(() => null);
+
+          // Fallback to full screen if not found in region
+          if (!matchAs1 || !matchAs1.found) {
+            matchAs1 = await TemplateMatcher.matchRaw(rawScreen2, as1Path, {
+              scales: [1.0, 0.95, 1.05],
+              threshold: thresh
+            }).catch(() => null);
+          }
+
+          if (matchAs1 && matchAs1.found) {
+            ctx.log(`🚜 Found as1 march button, clicking (${matchAs1.targetPoint.x}, ${matchAs1.targetPoint.y})`, 'info');
+            await adb.tap(matchAs1.targetPoint.x, matchAs1.targetPoint.y);
+            foundAs1 = true;
+            break;
+          }
+
+          await interruptibleWait(350);
+        }
+
+        if (!foundAs1) {
+          ctx.log('🚜 as1 march button not detected on screen', 'warn');
+        }
+
+        // 4. Wait 6 seconds before next farming turn (instantly stops if stop sent)
+        if (!(await interruptibleWait(6000))) break;
       }
-
-      // 3. search as1.png 230-309 1591-1670
-      const rawScreen2 = await adb.screencapRaw();
-      const matchAs1 = await TemplateMatcher.matchRaw(rawScreen2, as1Path, {
-        scales: [1.0],
-        threshold: 0.95,
-        region: { minX: 230, maxX: 309, minY: 1591, maxY: 1670 }
-      });
-      if (matchAs1.found) {
-        ctx.log(`🚜 Found as1, clicking (${matchAs1.targetPoint.x}, ${matchAs1.targetPoint.y})`, 'info');
-        await adb.tap(matchAs1.targetPoint.x, matchAs1.targetPoint.y);
-        await sleep(500); // Small delay after click
+    } finally {
+      farmRunning = false;
+      if (MacroManager.getRunningMacro() === 'farm') {
+        MacroManager.setRunningMacro(null);
       }
-
-      // 4. wait 6 seconds
-      await sleep(6000);
     }
 
-    // @ts-ignore
-    MacroManager.runningMacroName = null;
     ctx.log('🚜 Farming stopped.', 'info');
+    if (ctx.reply) await ctx.reply('-# 🚜 Farming stopped.');
     return { success: true, message: 'Farming stopped' };
   }
 };
