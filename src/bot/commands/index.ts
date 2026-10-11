@@ -1429,7 +1429,7 @@ export const farmCommand: CommandDefinition = {
       const rawScreen1 = await adb.screencapRaw();
       const matchRssatk = await TemplateMatcher.matchRaw(rawScreen1, rssatkPath, {
         scales: [1.0],
-        threshold: config.matchThreshold,
+        threshold: 0.95,
         region: { minX: 727, maxX: 796, minY: 1227, maxY: 1301 }
       });
       if (matchRssatk.found) {
@@ -1442,7 +1442,7 @@ export const farmCommand: CommandDefinition = {
       const rawScreen2 = await adb.screencapRaw();
       const matchAs1 = await TemplateMatcher.matchRaw(rawScreen2, as1Path, {
         scales: [1.0],
-        threshold: config.matchThreshold,
+        threshold: 0.95,
         region: { minX: 230, maxX: 309, minY: 1591, maxY: 1670 }
       });
       if (matchAs1.found) {
