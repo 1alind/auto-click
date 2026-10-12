@@ -20,25 +20,50 @@ fi
 adb start-server &>/dev/null || true
 
 # Check & auto-install Wi-Fi Debug Keeper APK if connected or once device connects
-APK_FILE="public/downloads/wifi-debug-keeper.apk"
+SDCARD_APK="$HOME/storage/shared/autoclick/wifi-debug-keeper.apk"
+SDCARD_ALT="/sdcard/autoclick/wifi-debug-keeper.apk"
+LOCAL_APK="public/downloads/wifi-debug-keeper.apk"
+
+APK_FILE="$LOCAL_APK"
+if [ -f "$SDCARD_APK" ]; then
+    APK_FILE="$SDCARD_APK"
+elif [ -f "$SDCARD_ALT" ]; then
+    APK_FILE="$SDCARD_ALT"
+fi
 APK_PKG="com.autoclick.wifidebug"
 
 if [ -f "$APK_FILE" ]; then
     LOCAL_VER=$(aapt dump badging "$APK_FILE" 2>/dev/null | grep -oE "versionCode='[0-9]+'" | grep -oE "[0-9]+" || echo "1")
     INSTALLED_VER=$(adb shell "dumpsys package $APK_PKG 2>/dev/null | grep -E 'versionCode=[0-9]+' | head -n 1" | grep -oE "[0-9]+" || echo "0")
+    LOCAL_HASH=$(sha256sum "$APK_FILE" 2>/dev/null | awk '{print $1}' || echo "")
+    HASH_FILE="data/autoclick/config/installed-apk-hash.json"
+    LAST_HASH=""
+    if [ -f "$HASH_FILE" ]; then
+        LAST_HASH=$(grep -oE '"hash":\s*"[^"]+"' "$HASH_FILE" | cut -d'"' -f4 || true)
+    fi
 
+    NEEDS_INSTALL=0
     if [ -z "$INSTALLED_VER" ] || [ "$INSTALLED_VER" -eq 0 ] 2>/dev/null; then
         echo "📦 Auto-installing Wi-Fi Debug Keeper APK (v${LOCAL_VER}) on device..."
-        adb install -r -d -g "$APK_FILE" &>/dev/null || adb push "$APK_FILE" /data/local/tmp/app.apk &>/dev/null && adb shell pm install -r -d -g /data/local/tmp/app.apk &>/dev/null || true
-        adb shell pm grant "$APK_PKG" android.permission.WRITE_SECURE_SETTINGS &>/dev/null || true
-        adb shell rm -f /data/local/tmp/app.apk &>/dev/null || true
+        NEEDS_INSTALL=1
     elif [ "$LOCAL_VER" -gt "$INSTALLED_VER" ] 2>/dev/null; then
         echo "🔄 Updating Wi-Fi Debug Keeper APK from v${INSTALLED_VER} to newer v${LOCAL_VER}..."
+        NEEDS_INSTALL=1
+    elif [ -n "$LOCAL_HASH" ] && [ -n "$LAST_HASH" ] && [ "$LOCAL_HASH" != "$LAST_HASH" ]; then
+        echo "🔄 Detected new APK build modification — applying update..."
+        NEEDS_INSTALL=1
+    else
+        echo "✅ Wi-Fi Debug Keeper APK up-to-date (v${INSTALLED_VER})"
+    fi
+
+    if [ "$NEEDS_INSTALL" -eq 1 ]; then
         adb install -r -d -g "$APK_FILE" &>/dev/null || adb push "$APK_FILE" /data/local/tmp/app.apk &>/dev/null && adb shell pm install -r -d -g /data/local/tmp/app.apk &>/dev/null || true
         adb shell pm grant "$APK_PKG" android.permission.WRITE_SECURE_SETTINGS &>/dev/null || true
         adb shell rm -f /data/local/tmp/app.apk &>/dev/null || true
-    else
-        echo "✅ Wi-Fi Debug Keeper APK up-to-date (v${INSTALLED_VER})"
+        if [ -n "$LOCAL_HASH" ]; then
+            mkdir -p "$(dirname "$HASH_FILE")"
+            echo "{\"hash\": \"$LOCAL_HASH\", \"versionCode\": $LOCAL_VER}" > "$HASH_FILE" 2>/dev/null || true
+        fi
     fi
 fi
 

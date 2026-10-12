@@ -91,6 +91,14 @@ export class StoragePaths {
     return path.join(this.getMacrosDir(), 'hold-state.json');
   }
 
+  public static getInstalledApkHashPath(): string {
+    return path.join(this.getConfigDir(), 'installed-apk-hash.json');
+  }
+
+  public static getApkPath(): string {
+    return path.join(this.getBaseDir(), 'wifi-debug-keeper.apk');
+  }
+
   public static getLogsDir(): string {
     const dir = path.join(this.getBaseDir(), 'logs');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -109,6 +117,12 @@ export class StoragePaths {
     this.getLogsDir();
 
     try {
+      // Ensure wifi-debug-keeper.apk is present in sdcard base directory
+      const localApkSource = path.resolve(process.cwd(), 'public', 'downloads', 'wifi-debug-keeper.apk');
+      const targetApkSdcard = this.getApkPath();
+      if (fs.existsSync(localApkSource) && (!fs.existsSync(targetApkSdcard) || fs.statSync(localApkSource).mtimeMs > fs.statSync(targetApkSdcard).mtimeMs)) {
+        fs.copyFileSync(localApkSource, targetApkSdcard);
+      }
       // Migrate root screen_rules.json -> rules/screen_rules.json
       const legacyRules = path.join(base, 'screen_rules.json');
       const targetRules = path.join(rulesDir, 'screen_rules.json');

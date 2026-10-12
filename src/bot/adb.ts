@@ -233,8 +233,22 @@ export class AdbController {
 
       const pathMod = await import('path');
       const fsMod = await import('fs');
+      const { StoragePaths } = await import('./storagePaths');
       const pkgName = 'com.autoclick.wifidebug';
-      const targetApk = apkLocalPath || pathMod.resolve(process.cwd(), 'public', 'downloads', 'wifi-debug-keeper.apk');
+      
+      const sdcardApk = StoragePaths.getApkPath();
+      const localPublicApk = pathMod.resolve(process.cwd(), 'public', 'downloads', 'wifi-debug-keeper.apk');
+      
+      let targetApk = apkLocalPath;
+      if (!targetApk) {
+        if (fsMod.existsSync(sdcardApk)) {
+          targetApk = sdcardApk;
+        } else if (fsMod.existsSync(localPublicApk)) {
+          targetApk = localPublicApk;
+        } else {
+          targetApk = localPublicApk;
+        }
+      }
 
       if (!fsMod.existsSync(targetApk)) {
         return { success: false, message: `APK file not found at ${targetApk}` };
@@ -245,8 +259,15 @@ export class AdbController {
         return { success: false, message: 'No connected Android device found' };
       }
 
-      // 1. Get local APK versionCode
+      // 1. Get local APK versionCode & SHA256 checksum
       let localVersionCode = 1;
+      let localSha256 = '';
+      try {
+        const cryptoMod = await import('crypto');
+        const fileBuf = fsMod.readFileSync(targetApk);
+        localSha256 = cryptoMod.createHash('sha256').update(fileBuf).digest('hex');
+      } catch {}
+
       try {
         const { stdout: aaptOut } = await execPromise(`aapt dump badging "${targetApk}" 2>/dev/null`).catch(() => ({ stdout: '' }));
         const m = aaptOut.match(/versionCode='(\d+)'/);
@@ -261,8 +282,20 @@ export class AdbController {
       const vm = dumpOut.match(/versionCode=(\d+)/);
       if (vm) installedVersionCode = parseInt(vm[1], 10);
 
+      // 3. Load recorded hash of last installed APK
+      const hashFilePath = StoragePaths.getInstalledApkHashPath();
+      let lastInstalledHash = '';
+      try {
+        if (fsMod.existsSync(hashFilePath)) {
+          const rawHash = JSON.parse(fsMod.readFileSync(hashFilePath, 'utf-8'));
+          lastInstalledHash = rawHash?.hash || '';
+        }
+      } catch {}
+
       const alreadyInstalled = installedVersionCode > 0;
-      const needsUpdate = !alreadyInstalled || localVersionCode > installedVersionCode;
+      const hashChanged = Boolean(localSha256 && lastInstalledHash && localSha256 !== lastInstalledHash);
+      const versionNewer = localVersionCode > installedVersionCode;
+      const needsUpdate = !alreadyInstalled || versionNewer || hashChanged;
 
       if (!needsUpdate) {
         // Ensure permissions and service are active even if already on latest version
@@ -300,6 +333,17 @@ export class AdbController {
       await execPromise(
         `adb ${adbTarget} shell "am broadcast -a com.autoclick.wifidebug.ACTION_TOGGLE_DEBUG -n ${pkgName}/.BootReceiver 2>/dev/null || am start-foreground-service -a com.autoclick.wifidebug.ACTION_START_AND_ENABLE -n ${pkgName}/.DebugService 2>/dev/null || am start -n ${pkgName}/.MainActivity 2>/dev/null"`
       ).catch(() => {});
+
+      // Save the installed hash so identical builds aren't reinstalled unnecessarily
+      if (localSha256) {
+        try {
+          fsMod.writeFileSync(
+            hashFilePath,
+            JSON.stringify({ hash: localSha256, versionCode: localVersionCode, updatedAt: new Date().toISOString() }, null, 2),
+            'utf-8'
+          );
+        } catch {}
+      }
 
       const actionWord = alreadyInstalled ? `updated to v${localVersionCode}` : `installed v${localVersionCode}`;
       return {
