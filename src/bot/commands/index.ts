@@ -1068,22 +1068,27 @@ export const liveCommand: CommandDefinition = {
     const status = await LiveController.startLiveTunnel(LIVE_PORT, (m) => ctx.log(m, 'info'), mode);
 
     const localLink = status.localUrl || `http://127.0.0.1:${LIVE_PORT}`;
+    const cleanIpPort = localLink.replace(/^https?:\/\//, '');
     const lines: string[] = [];
 
     if (mode === 'local') {
       lines.push('-# live local started');
-      if (localLink) lines.push(`-# [${localLink}](${localLink})`);
+      if (localLink) lines.push(`[${cleanIpPort}](${localLink})`);
     } else if (mode === 'net') {
       lines.push('-# live net started');
       if (status.publicUrl) {
-        lines.push(`-# [${status.publicUrl}](${status.publicUrl})`);
+        const cleanNet = status.publicUrl.replace(/^https?:\/\//, '');
+        lines.push(`[${cleanNet}](${status.publicUrl})`);
       } else if (status.error) {
         lines.push(`-# error: ${status.error}`);
       }
     } else {
       lines.push('-# live all started');
-      if (localLink) lines.push(`-# [${localLink}](${localLink})`);
-      if (status.publicUrl) lines.push(`-# [${status.publicUrl}](${status.publicUrl})`);
+      if (localLink) lines.push(`[${cleanIpPort}](${localLink})`);
+      if (status.publicUrl) {
+        const cleanNet = status.publicUrl.replace(/^https?:\/\//, '');
+        lines.push(`[${cleanNet}](${status.publicUrl})`);
+      }
     }
 
     const msg = lines.join('\n');

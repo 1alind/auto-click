@@ -254,6 +254,8 @@ export class DiscordBotClient {
         if (!trimmed) return '';
         // Never send reaction hint line
         if (/react with any emoji/i.test(trimmed) || /remove this message/i.test(trimmed)) return '';
+        // If it's a URL or markdown link [text](url), keep it clean without -# so Discord renders it as a clickable link
+        if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('[')) return trimmed;
         // If it's already a component/button-only line (starting with <) or already formatted, leave it, else prepend -#
         return trimmed.startsWith('-#') || trimmed.startsWith('<') ? trimmed : `-# ${trimmed}`;
       })
