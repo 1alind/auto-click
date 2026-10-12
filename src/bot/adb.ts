@@ -318,8 +318,11 @@ export class AdbController {
         };
       }
 
-      // Install or update with -r -d -g flags (replace existing, allow downgrade, grant runtime permissions)
-      let { stdout: instOut, stderr: instErr } = await execPromise(`adb ${adbTarget} install -r -d -g "${targetApk}"`).catch((e) => ({
+      // Temporarily disable package verifier to prevent "App not installed" false blocks from Play Protect
+      await execPromise(`adb ${adbTarget} shell settings put global package_verifier_enable 0`).catch(() => {});
+
+      // Install or update with robust flags (-r -d -g --bypass-low-target-sdk-block)
+      let { stdout: instOut, stderr: instErr } = await execPromise(`adb ${adbTarget} install -r -d -g --bypass-low-target-sdk-block "${targetApk}"`).catch((e) => ({
         stdout: e.stdout || '',
         stderr: e.stderr || e.message || ''
       }));
@@ -328,9 +331,9 @@ export class AdbController {
       let installOk = outCombined.includes('success') || outCombined.includes('installed');
 
       // If signature mismatch / app not installed error occurs, uninstall old conflicting package and retry clean
-      if (!installOk && (outCombined.includes('incompatible') || outCombined.includes('failed_update_incompatible') || outCombined.includes('already_exists'))) {
+      if (!installOk || outCombined.includes('incompatible') || outCombined.includes('failed_update_incompatible') || outCombined.includes('already_exists')) {
         await execPromise(`adb ${adbTarget} uninstall ${pkgName}`).catch(() => {});
-        const retryRes = await execPromise(`adb ${adbTarget} install -r -d -g "${targetApk}"`).catch((e) => ({
+        const retryRes = await execPromise(`adb ${adbTarget} install -r -d -g --bypass-low-target-sdk-block "${targetApk}"`).catch((e) => ({
           stdout: e.stdout || '',
           stderr: e.stderr || e.message || ''
         }));
@@ -341,12 +344,15 @@ export class AdbController {
       }
 
       if (!installOk) {
-        // Fallback: push to /data/local/tmp and run pm install -r
-        await execPromise(`adb ${adbTarget} push "${targetApk}" /data/local/tmp/wifi-debug-keeper.apk`).catch(() => {});
+        // Fallback: push to /data/local/tmp and run pm install -r --bypass-low-target-sdk-block
+        await execPromise(`adb ${adbTarget} push "${targetApk}" /data/local/tmp/wifi-debug.apk`).catch(() => {});
         await execPromise(`adb ${adbTarget} shell pm uninstall ${pkgName}`).catch(() => {});
-        await execPromise(`adb ${adbTarget} shell pm install -r -d -g /data/local/tmp/wifi-debug-keeper.apk`).catch(() => {});
-        await execPromise(`adb ${adbTarget} shell rm -f /data/local/tmp/wifi-debug-keeper.apk`).catch(() => {});
+        await execPromise(`adb ${adbTarget} shell pm install -r -d -g --bypass-low-target-sdk-block /data/local/tmp/wifi-debug.apk`).catch(() => {});
+        await execPromise(`adb ${adbTarget} shell rm -f /data/local/tmp/wifi-debug.apk`).catch(() => {});
       }
+
+      // Re-enable package verifier
+      await execPromise(`adb ${adbTarget} shell settings put global package_verifier_enable 1`).catch(() => {});
 
       // Grant WRITE_SECURE_SETTINGS permission automatically
       await execPromise(`adb ${adbTarget} shell pm grant ${pkgName} android.permission.WRITE_SECURE_SETTINGS`).catch(() => {});

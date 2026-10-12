@@ -65,12 +65,14 @@ if [ -f "$APK_FILE" ]; then
     fi
 
     if [ "$NEEDS_INSTALL" -eq 1 ]; then
-        INST_OUT=$(adb install -r -d -g "$APK_FILE" 2>&1 || true)
+        adb shell settings put global package_verifier_enable 0 &>/dev/null || true
+        INST_OUT=$(adb install -r -d -g --bypass-low-target-sdk-block "$APK_FILE" 2>&1 || true)
         if echo "$INST_OUT" | grep -qi "incompatible\|failed\|error"; then
-            echo "⚠️ Existing installation signature conflict detected. Removing old app and retrying clean install..."
+            echo "⚠️ Installation blocked or conflict detected. Removing old app and retrying clean install..."
             adb uninstall "$APK_PKG" &>/dev/null || true
-            adb install -r -d -g "$APK_FILE" &>/dev/null || adb push "$APK_FILE" /data/local/tmp/app.apk &>/dev/null && adb shell pm install -r -d -g /data/local/tmp/app.apk &>/dev/null || true
+            adb install -r -d -g --bypass-low-target-sdk-block "$APK_FILE" &>/dev/null || adb push "$APK_FILE" /data/local/tmp/app.apk &>/dev/null && adb shell pm install -r -d -g --bypass-low-target-sdk-block /data/local/tmp/app.apk &>/dev/null || true
         fi
+        adb shell settings put global package_verifier_enable 1 &>/dev/null || true
         adb shell pm grant "$APK_PKG" android.permission.WRITE_SECURE_SETTINGS &>/dev/null || true
         adb shell rm -f /data/local/tmp/app.apk &>/dev/null || true
         if [ -n "$LOCAL_HASH" ]; then
