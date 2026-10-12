@@ -1183,6 +1183,60 @@ export default function App() {
                   <li><strong className="text-slate-300">4- .sh searches port & connects:</strong> Probes 5555, mDNS, and local nmap ports.</li>
                 </ul>
               </div>
+
+              {/* Virtual App UI Preview & Useless Buttons Panel */}
+              <div className="bg-gradient-to-br from-slate-950 to-emerald-950/30 border border-emerald-500/30 rounded-xl p-3.5 space-y-3">
+                <div className="flex items-center gap-3">
+                  <div className="h-11 w-11 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center text-xl shadow-lg shadow-emerald-500/20 border border-emerald-300/40">
+                    ⚡
+                  </div>
+                  <div>
+                    <div className="font-bold text-slate-100 flex items-center gap-1.5">
+                      <span>Wi-Fi Debug Keeper</span>
+                      <span className="text-[9px] px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 rounded-full border border-emerald-500/30">v1.0</span>
+                    </div>
+                    <div className="text-[10px] text-emerald-400/80">com.autoclick.wifidebug • Background Service Active</div>
+                  </div>
+                </div>
+
+                <div className="text-[11px] text-slate-400 italic">
+                  "Fully loaded with highly sophisticated useless buttons for maximum debugging satisfaction."
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    onClick={() => showToast('⚡ Turbo Overdrive: Port 5555 overclocked to infinity! (Still 5555)')}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-200 font-medium transition flex items-center justify-center gap-1.5 group"
+                  >
+                    <span className="group-hover:scale-110 transition">🚀</span>
+                    <span>Turbo Overdrive</span>
+                  </button>
+
+                  <button
+                    onClick={() => showToast('🛡️ Quantum Shield: Zero bugs detected in the vicinity.')}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-200 font-medium transition flex items-center justify-center gap-1.5 group"
+                  >
+                    <span className="group-hover:scale-110 transition">🛡️</span>
+                    <span>Quantum Shield</span>
+                  </button>
+
+                  <button
+                    onClick={() => showToast('☕ Coffee Mode: Caffeine level 100%. Code output velocity unchanged.')}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-200 font-medium transition flex items-center justify-center gap-1.5 group"
+                  >
+                    <span className="group-hover:scale-110 transition">☕</span>
+                    <span>Coffee Mode</span>
+                  </button>
+
+                  <button
+                    onClick={() => showToast('✨ Pixel Polish: 10,000 extra pixels added to imagination.')}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-200 font-medium transition flex items-center justify-center gap-1.5 group"
+                  >
+                    <span className="group-hover:scale-110 transition">✨</span>
+                    <span>Pixel Polish</span>
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="px-4 py-2.5 border-t border-slate-800 bg-slate-950/50 flex items-center justify-between">
