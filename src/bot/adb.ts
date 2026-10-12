@@ -237,21 +237,29 @@ export class AdbController {
       const pkgName = 'com.autoclick.wifidebug';
       
       const sdcardApk = StoragePaths.getApkPath();
-      const localPublicApk = pathMod.resolve(process.cwd(), 'public', 'downloads', 'wifi-debug-keeper.apk');
+      const downloadsDir = pathMod.resolve(process.cwd(), 'public', 'downloads');
       
       let targetApk = apkLocalPath;
       if (!targetApk) {
         if (fsMod.existsSync(sdcardApk)) {
           targetApk = sdcardApk;
-        } else if (fsMod.existsSync(localPublicApk)) {
-          targetApk = localPublicApk;
-        } else {
-          targetApk = localPublicApk;
+        } else if (fsMod.existsSync(downloadsDir)) {
+          const files = fsMod.readdirSync(downloadsDir);
+          const apkFiles = files.filter(f => f.startsWith('wifi-debug') && f.endsWith('.apk'));
+          if (apkFiles.length > 0) {
+            apkFiles.sort((a, b) => {
+              const statA = fsMod.statSync(pathMod.join(downloadsDir, a));
+              const statB = fsMod.statSync(pathMod.join(downloadsDir, b));
+              return statB.mtimeMs - statA.mtimeMs;
+            });
+            targetApk = pathMod.join(downloadsDir, apkFiles[0]);
+          }
         }
       }
 
-      if (!fsMod.existsSync(targetApk)) {
-        return { success: false, message: `APK file not found at ${targetApk}` };
+      if (!targetApk || !fsMod.existsSync(targetApk)) {
+        // Fallback to static name
+        targetApk = pathMod.resolve(process.cwd(), 'public', 'downloads', 'wifi-debug-keeper.apk');
       }
 
       let adbTarget = await this.resolveTargetFlag().catch(() => '');

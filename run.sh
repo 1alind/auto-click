@@ -20,16 +20,24 @@ fi
 adb start-server &>/dev/null || true
 
 # Check & auto-install Wi-Fi Debug Keeper APK if connected or once device connects
-SDCARD_APK="$HOME/storage/shared/autoclick/wifi-debug-keeper.apk"
-SDCARD_ALT="/sdcard/autoclick/wifi-debug-keeper.apk"
-LOCAL_APK="public/downloads/wifi-debug-keeper.apk"
-
-APK_FILE="$LOCAL_APK"
-if [ -f "$SDCARD_APK" ]; then
-    APK_FILE="$SDCARD_APK"
-elif [ -f "$SDCARD_ALT" ]; then
-    APK_FILE="$SDCARD_ALT"
+APK_FILE=""
+if [ -d "public/downloads" ]; then
+    FOUND_APK=$(ls -t public/downloads/wifi-debug-*.apk 2>/dev/null | head -n 1 || true)
+    if [ -n "$FOUND_APK" ] && [ -f "$FOUND_APK" ]; then
+        APK_FILE="$FOUND_APK"
+    fi
 fi
+
+if [ -z "$APK_FILE" ]; then
+    if [ -f "$HOME/storage/shared/autoclick/wifi-debug-keeper.apk" ]; then
+        APK_FILE="$HOME/storage/shared/autoclick/wifi-debug-keeper.apk"
+    elif [ -f "/sdcard/autoclick/wifi-debug-keeper.apk" ]; then
+        APK_FILE="/sdcard/autoclick/wifi-debug-keeper.apk"
+    elif [ -f "public/downloads/wifi-debug-keeper.apk" ]; then
+        APK_FILE="public/downloads/wifi-debug-keeper.apk"
+    fi
+fi
+
 APK_PKG="com.autoclick.wifidebug"
 
 if [ -f "$APK_FILE" ]; then

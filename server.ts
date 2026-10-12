@@ -609,16 +609,37 @@ async function startServer() {
     }
   });
 
-  // Wi-Fi Debug Keeper APK Download Endpoints
-  const apkFilePath = path.resolve(__dirname, 'public', 'downloads', 'wifi-debug-keeper.apk');
+  // Wi-Fi Debug Keeper APK Download Endpoints with timestamped anti-cache support
+  app.get(/^\/(?:api\/download|downloads)\/(?:wifi-debug-.*\.apk|apk)$/, (_req, res) => {
+    try {
+      const downloadsDir = path.resolve(__dirname, 'public', 'downloads');
+      let targetFile = path.resolve(downloadsDir, 'wifi-debug-keeper.apk');
+      
+      if (fs.existsSync(downloadsDir)) {
+        const files = fs.readdirSync(downloadsDir);
+        const apkFiles = files.filter(f => f.startsWith('wifi-debug') && f.endsWith('.apk'));
+        if (apkFiles.length > 0) {
+          // Sort by mtime descending to pick latest
+          apkFiles.sort((a, b) => {
+            const statA = fs.statSync(path.join(downloadsDir, a));
+            const statB = fs.statSync(path.join(downloadsDir, b));
+            return statB.mtimeMs - statA.mtimeMs;
+          });
+          targetFile = path.join(downloadsDir, apkFiles[0]);
+        }
+      }
 
-  app.get(['/api/download/wifi-debug-keeper.apk', '/api/download/apk', '/downloads/wifi-debug-keeper.apk'], (_req, res) => {
-    if (fs.existsSync(apkFilePath)) {
-      res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-      res.setHeader('Content-Disposition', 'attachment; filename="wifi-debug-keeper.apk"');
-      res.sendFile(apkFilePath);
-    } else {
-      res.status(404).json({ success: false, message: 'APK file not found. Please build or check public/downloads.' });
+      if (fs.existsSync(targetFile)) {
+        const timestamp = Date.now();
+        res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Content-Disposition', `attachment; filename="wifi-debug-${timestamp}.apk"`);
+        res.sendFile(targetFile);
+      } else {
+        res.status(404).json({ success: false, message: 'APK file not found in public/downloads.' });
+      }
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
     }
   });
 
