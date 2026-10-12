@@ -171,13 +171,16 @@ export const holdCommand: CommandDefinition = {
     let durationMinutes = 1;
 
     if (cleanDur.endsWith('ms')) {
+      // Milliseconds explicit
       durationMinutes = parseFloat(cleanDur) / 60000;
-    } else if (cleanDur.endsWith('s') && !cleanDur.endsWith('mins')) {
+    } else if (cleanDur.endsWith('s') && !cleanDur.endsWith('mins') && !cleanDur.endsWith('min')) {
+      // Seconds explicit
       durationMinutes = parseFloat(cleanDur) / 60;
     } else {
+      // Number only or with m/min/mins: DEFAULT IS ALWAYS MINUTES (e.g. "10" = 10 minutes)
       const parsed = parseFloat(cleanDur.replace(/(m|min|mins)$/i, ''));
       if (isNaN(parsed) || parsed <= 0) {
-        const msg = 'invalid time-in-minutes (e.g. `hold silver 10` or `hold 123-345 56-738 5`)';
+        const msg = 'invalid time-in-minutes (e.g. `hold silver 10` for 10 minutes, or `hold 123-345 56-738 5`)';
         if (ctx.reply) await ctx.reply(msg);
         return { success: false, message: msg };
       }
