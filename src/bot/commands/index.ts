@@ -94,7 +94,7 @@ export function stopHold(): boolean {
 export const holdCommand: CommandDefinition = {
   name: 'hold',
   description: 'Holds coordinates or range on device for a duration specified in minutes.',
-  usage: 'hold <xrange> <yrange> <time-in-minutes> (e.g. hold 123-345 56-738 5)',
+  usage: 'hold silver <time-in-minutes>  OR  hold <xrange> <yrange> <time-in-minutes>',
   aliases: ['longpress', 'press', 'input-hold'],
 
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
@@ -102,15 +102,70 @@ export const holdCommand: CommandDefinition = {
     const { MacroManager } = await import('../macroManager');
     const adb = botManager.getAdbController();
 
-    if (ctx.args.length < 3) {
-      const msg = 'usage: `hold <xrange> <yrange> <time-in-minutes>` (e.g. `hold 123-345 56-738 5`)';
-      if (ctx.reply) await ctx.reply(msg);
-      return { success: false, message: msg };
-    }
+    let minX: number;
+    let maxX: number;
+    let minY: number;
+    let maxY: number;
+    let isRange = false;
+    let targetLabel = '';
+    let durArg = '';
 
-    const argX = ctx.args[0].trim();
-    const argY = ctx.args[1].trim();
-    const durArg = ctx.args[2].trim();
+    // Check if user is using named preset targets, e.g. "hold silver 10" or "hold silver 5m"
+    const firstArg = ctx.args[0]?.trim().toLowerCase();
+    if (firstArg === 'silver') {
+      if (ctx.args.length < 2) {
+        const msg = 'usage: `hold silver <time-in-minutes>` (e.g. `hold silver 10`)';
+        if (ctx.reply) await ctx.reply(msg);
+        return { success: false, message: msg };
+      }
+      minX = 677;
+      maxX = 955;
+      minY = 1946;
+      maxY = 2099;
+      isRange = true;
+      targetLabel = 'silver [677-955 1946-2099]';
+      durArg = ctx.args[1].trim();
+    } else {
+      if (ctx.args.length < 3) {
+        const msg = 'usage: `hold <xrange> <yrange> <time-in-minutes>` or `hold silver <time>` (e.g. `hold silver 10`, `hold 123-345 56-738 5`)';
+        if (ctx.reply) await ctx.reply(msg);
+        return { success: false, message: msg };
+      }
+
+      const argX = ctx.args[0].trim();
+      const argY = ctx.args[1].trim();
+      durArg = ctx.args[2].trim();
+
+      if (argX.includes('-')) {
+        isRange = true;
+        const parts = argX.split('-').map(Number);
+        minX = parts[0];
+        maxX = parts[1];
+      } else {
+        const x = Number(argX);
+        minX = x;
+        maxX = x;
+      }
+
+      if (argY.includes('-')) {
+        isRange = true;
+        const parts = argY.split('-').map(Number);
+        minY = parts[0];
+        maxY = parts[1];
+      } else {
+        const y = Number(argY);
+        minY = y;
+        maxY = y;
+      }
+
+      if (isNaN(minX) || isNaN(maxX) || isNaN(minY) || isNaN(maxY)) {
+        const msg = 'invalid coordinates or range (e.g. `hold silver 10` or `hold 123-345 56-738 5`)';
+        if (ctx.reply) await ctx.reply(msg);
+        return { success: false, message: msg };
+      }
+
+      targetLabel = isRange ? `${argX} ${argY}` : `(${minX}, ${minY})`;
+    }
 
     const cleanDur = durArg.toLowerCase();
     let durationMinutes = 1;
@@ -122,7 +177,7 @@ export const holdCommand: CommandDefinition = {
     } else {
       const parsed = parseFloat(cleanDur.replace(/(m|min|mins)$/i, ''));
       if (isNaN(parsed) || parsed <= 0) {
-        const msg = 'invalid time-in-minutes (e.g. `hold 123-345 56-738 5`)';
+        const msg = 'invalid time-in-minutes (e.g. `hold silver 10` or `hold 123-345 56-738 5`)';
         if (ctx.reply) await ctx.reply(msg);
         return { success: false, message: msg };
       }
@@ -130,42 +185,7 @@ export const holdCommand: CommandDefinition = {
     }
 
     const durationMs = Math.max(100, Math.round(durationMinutes * 60 * 1000));
-
-    let minX: number;
-    let maxX: number;
-    let minY: number;
-    let maxY: number;
-    let isRange = false;
-
-    if (argX.includes('-')) {
-      isRange = true;
-      const parts = argX.split('-').map(Number);
-      minX = parts[0];
-      maxX = parts[1];
-    } else {
-      const x = Number(argX);
-      minX = x;
-      maxX = x;
-    }
-
-    if (argY.includes('-')) {
-      isRange = true;
-      const parts = argY.split('-').map(Number);
-      minY = parts[0];
-      maxY = parts[1];
-    } else {
-      const y = Number(argY);
-      minY = y;
-      maxY = y;
-    }
-
-    if (isNaN(minX) || isNaN(maxX) || isNaN(minY) || isNaN(maxY)) {
-      const msg = 'invalid coordinates or range (e.g. `hold 123-345 56-738 5`)';
-      if (ctx.reply) await ctx.reply(msg);
-      return { success: false, message: msg };
-    }
-
-    const targetDesc = isRange ? `${argX} ${argY}` : `(${minX}, ${minY})`;
+    const targetDesc = targetLabel;
     const minDesc = durationMinutes >= 1 ? `${durationMinutes} minute(s)` : `${Math.round(durationMs / 1000)}s`;
 
     holdRunning = true;
@@ -1266,8 +1286,10 @@ const COMMAND_MANUALS: Record<string, string> = {
 
   hold: [
     '**hold** (or `press`, `longpress`) — Hold coordinates on screen for specified minutes',
-    'usage: `hold <xrange> <yrange> <time-in-minutes>`',
-    'example: `hold 123-345 56-738 5` (holds random point in range for 5 minutes)'
+    'usage:',
+    '• `hold silver <minutes>` — holds silver area `677-955 1946-2099` (e.g. `hold silver 10`)',
+    '• `hold <xrange> <yrange> <minutes>` — holds random point in range (e.g. `hold 123-345 56-738 5`)',
+    '• `hold <x> <y> <minutes>` — holds exact coordinate point'
   ].join('\n'),
 
   screenshot: [
