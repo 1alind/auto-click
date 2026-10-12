@@ -1129,13 +1129,30 @@ export default function App() {
                 <p className="text-[11px] text-slate-400">
                   Installs directly on Samsung Galaxy A50 / A52s or any Android device. Keeps Wireless Debugging active across reboots and Wi-Fi disconnects.
                 </p>
-                <a
-                  href="/api/download/wifi-debug-keeper.apk"
-                  download="wifi-debug-keeper.apk"
-                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs shadow-md transition"
-                >
-                  <span>⬇️ Download wifi-debug-keeper.apk</span>
-                </a>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <a
+                    href="/api/download/wifi-debug-keeper.apk"
+                    download="wifi-debug-keeper.apk"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs shadow-md transition"
+                  >
+                    <span>⬇️ Download APK</span>
+                  </a>
+
+                  <button
+                    onClick={async () => {
+                      showToast('Installing APK on connected device...');
+                      try {
+                        const res = await fetch('/api/adb/install-apk', { method: 'POST' }).then((r) => r.json());
+                        showToast(res.message || (res.success ? 'Installed!' : 'Failed'));
+                      } catch (e: any) {
+                        showToast(`Error: ${e.message}`);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs shadow-md transition"
+                  >
+                    <span>⚡ 1-Click Install via ADB</span>
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-2">

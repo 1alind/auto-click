@@ -87,6 +87,10 @@ export class StoragePaths {
     return path.join(this.getConfigDir(), 'last-updated.json');
   }
 
+  public static getHoldStatePath(): string {
+    return path.join(this.getMacrosDir(), 'hold-state.json');
+  }
+
   public static getLogsDir(): string {
     const dir = path.join(this.getBaseDir(), 'logs');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });

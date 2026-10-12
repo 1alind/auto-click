@@ -713,6 +713,8 @@ export class DiscordBotClient {
             isRunning
           }).catch(() => {});
           await MacroManager.resumeStartIfNeeded();
+          const { resumeHoldIfNeeded } = await import('./commands/index');
+          await resumeHoldIfNeeded();
           this.startAutoCleanupTask(true);
         } catch {
           // ignore ready notification error

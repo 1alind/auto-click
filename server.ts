@@ -141,6 +141,15 @@ async function startServer() {
     }
   });
 
+  app.post('/api/adb/install-apk', async (_req, res) => {
+    try {
+      const result = await botManager.getAdbController().autoInstallApk();
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
   app.post('/api/adb/tap', async (req, res) => {
     try {
       const { x, y, minX, maxX, minY, maxY } = req.body;

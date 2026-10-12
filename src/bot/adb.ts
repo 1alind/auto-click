@@ -220,6 +220,97 @@ export class AdbController {
     );
   }
 
+  /**
+   * Auto-installs or updates the Wi-Fi Debug Keeper APK on the connected device
+   * and automatically grants the WRITE_SECURE_SETTINGS permission.
+   */
+  public async autoInstallApk(apkLocalPath?: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const isAdb = await this.isAdbAvailable();
+      if (!isAdb) {
+        return { success: false, message: 'ADB is not available' };
+      }
+
+      const pathMod = await import('path');
+      const fsMod = await import('fs');
+      const pkgName = 'com.autoclick.wifidebug';
+      const targetApk = apkLocalPath || pathMod.resolve(process.cwd(), 'public', 'downloads', 'wifi-debug-keeper.apk');
+
+      if (!fsMod.existsSync(targetApk)) {
+        return { success: false, message: `APK file not found at ${targetApk}` };
+      }
+
+      let adbTarget = await this.resolveTargetFlag().catch(() => '');
+      if (!adbTarget) {
+        return { success: false, message: 'No connected Android device found' };
+      }
+
+      // 1. Get local APK versionCode
+      let localVersionCode = 1;
+      try {
+        const { stdout: aaptOut } = await execPromise(`aapt dump badging "${targetApk}" 2>/dev/null`).catch(() => ({ stdout: '' }));
+        const m = aaptOut.match(/versionCode='(\d+)'/);
+        if (m) localVersionCode = parseInt(m[1], 10);
+      } catch {}
+
+      // 2. Get installed package versionCode on Android device
+      let installedVersionCode = 0;
+      const { stdout: dumpOut } = await execPromise(
+        `adb ${adbTarget} shell "dumpsys package ${pkgName} 2>/dev/null | grep -E 'versionCode=[0-9]+' | head -n 1"`
+      ).catch(() => ({ stdout: '' }));
+      const vm = dumpOut.match(/versionCode=(\d+)/);
+      if (vm) installedVersionCode = parseInt(vm[1], 10);
+
+      const alreadyInstalled = installedVersionCode > 0;
+      const needsUpdate = !alreadyInstalled || localVersionCode > installedVersionCode;
+
+      if (!needsUpdate) {
+        // Ensure permissions and service are active even if already on latest version
+        await execPromise(`adb ${adbTarget} shell pm grant ${pkgName} android.permission.WRITE_SECURE_SETTINGS`).catch(() => {});
+        await execPromise(
+          `adb ${adbTarget} shell "am broadcast -a com.autoclick.wifidebug.ACTION_TOGGLE_DEBUG -n ${pkgName}/.BootReceiver 2>/dev/null || am start-foreground-service -a com.autoclick.wifidebug.ACTION_START_AND_ENABLE -n ${pkgName}/.DebugService 2>/dev/null || am start -n ${pkgName}/.MainActivity 2>/dev/null"`
+        ).catch(() => {});
+
+        return {
+          success: true,
+          message: `Wi-Fi Debug Keeper is already up-to-date (v${installedVersionCode}) on device (${adbTarget})`
+        };
+      }
+
+      // Install or update with -r -d -g flags (replace existing, allow downgrade, grant runtime permissions)
+      const { stdout: instOut, stderr: instErr } = await execPromise(`adb ${adbTarget} install -r -d -g "${targetApk}"`).catch((e) => ({
+        stdout: e.stdout || '',
+        stderr: e.stderr || e.message || ''
+      }));
+
+      const outCombined = `${instOut} ${instErr}`.toLowerCase();
+      const installOk = outCombined.includes('success') || outCombined.includes('installed');
+
+      if (!installOk && !alreadyInstalled) {
+        // Fallback: push to /data/local/tmp and run pm install -r
+        await execPromise(`adb ${adbTarget} push "${targetApk}" /data/local/tmp/wifi-debug-keeper.apk`).catch(() => {});
+        await execPromise(`adb ${adbTarget} shell pm install -r -d -g /data/local/tmp/wifi-debug-keeper.apk`).catch(() => {});
+        await execPromise(`adb ${adbTarget} shell rm -f /data/local/tmp/wifi-debug-keeper.apk`).catch(() => {});
+      }
+
+      // Grant WRITE_SECURE_SETTINGS permission automatically
+      await execPromise(`adb ${adbTarget} shell pm grant ${pkgName} android.permission.WRITE_SECURE_SETTINGS`).catch(() => {});
+
+      // Launch start order
+      await execPromise(
+        `adb ${adbTarget} shell "am broadcast -a com.autoclick.wifidebug.ACTION_TOGGLE_DEBUG -n ${pkgName}/.BootReceiver 2>/dev/null || am start-foreground-service -a com.autoclick.wifidebug.ACTION_START_AND_ENABLE -n ${pkgName}/.DebugService 2>/dev/null || am start -n ${pkgName}/.MainActivity 2>/dev/null"`
+      ).catch(() => {});
+
+      const actionWord = alreadyInstalled ? `updated to v${localVersionCode}` : `installed v${localVersionCode}`;
+      return {
+        success: true,
+        message: `Wi-Fi Debug Keeper ${actionWord} & permissions granted on device (${adbTarget})`
+      };
+    } catch (err: any) {
+      return { success: false, message: `APK installation failed: ${err.message}` };
+    }
+  }
+
   private adbAvailableCache: boolean | null = null;
 
   /**

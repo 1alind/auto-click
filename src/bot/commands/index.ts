@@ -78,8 +78,25 @@ export const tapCommand: CommandDefinition = {
   }
 };
 
+export interface HoldState {
+  targetDesc: string;
+  isRange: boolean;
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  totalDurationMs: number;
+  remainingDurationMs: number;
+  startedAt: number;
+  lastPausedAt?: number;
+  channelId?: string;
+  resumeAfterUpdate: boolean;
+}
+
 let holdRunning = false;
 let holdStopRequested = false;
+let holdStoppingForUpdate = false;
+let activeHoldState: HoldState | null = null;
 
 export function isHoldRunning(): boolean {
   return holdRunning;
@@ -88,7 +105,111 @@ export function isHoldRunning(): boolean {
 export function stopHold(): boolean {
   if (!holdRunning) return false;
   holdStopRequested = true;
+  clearPersistedHoldState();
   return true;
+}
+
+export function saveHoldState(state: HoldState): void {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const p = StoragePaths.getHoldStatePath();
+    const dir = path.dirname(p);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(state, null, 2), 'utf-8');
+  } catch {}
+}
+
+export function loadHoldState(): HoldState | null {
+  try {
+    const fs = require('fs');
+    const p = StoragePaths.getHoldStatePath();
+    if (fs.existsSync(p)) {
+      const raw = fs.readFileSync(p, 'utf-8');
+      return JSON.parse(raw);
+    }
+  } catch {}
+  return null;
+}
+
+export function clearPersistedHoldState(): void {
+  try {
+    const fs = require('fs');
+    const p = StoragePaths.getHoldStatePath();
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  } catch {}
+}
+
+/**
+ * Pauses active hold for a GitHub update, calculates remaining time, saves state to SD card,
+ * and releases Android screen touches so the device doesn't stay stuck during restart.
+ */
+export async function pauseHoldForUpdate(): Promise<boolean> {
+  if (!holdRunning || !activeHoldState) return false;
+  holdStoppingForUpdate = true;
+  holdStopRequested = true;
+
+  const now = Date.now();
+  const elapsed = now - activeHoldState.startedAt;
+  const remaining = Math.max(1000, activeHoldState.totalDurationMs - elapsed);
+
+  activeHoldState.remainingDurationMs = remaining;
+  activeHoldState.lastPausedAt = now;
+  activeHoldState.resumeAfterUpdate = true;
+  saveHoldState(activeHoldState);
+
+  try {
+    const { botManager } = await import('../botManager');
+    await botManager.getAdbController().stopAllTaps();
+  } catch {}
+
+  return true;
+}
+
+/**
+ * Automatically resumes a paused hold when the bot comes back online after an update.
+ */
+export async function resumeHoldIfNeeded(): Promise<void> {
+  const state = loadHoldState();
+  if (!state || !state.resumeAfterUpdate) return;
+
+  clearPersistedHoldState();
+
+  if (state.remainingDurationMs <= 500) {
+    return;
+  }
+
+  const { botManager } = await import('../botManager');
+  const discord = botManager.getDiscordBot();
+
+  const remSec = Math.round(state.remainingDurationMs / 1000);
+  const remDesc = remSec >= 60 ? `${(remSec / 60).toFixed(1)} minute(s)` : `${remSec}s`;
+
+  const resumeMsg = `-# 🔄 Update complete — resuming hold on **${state.targetDesc}** for remaining **${remDesc}**...`;
+  try {
+    if (discord.isConnected()) {
+      await discord.sendErrorMessage({ content: resumeMsg });
+    }
+  } catch {}
+
+  const ctx: CommandContext = {
+    commandName: 'hold',
+    args: state.isRange
+      ? [`${state.minX}-${state.maxX}`, `${state.minY}-${state.maxY}`, `${remSec}s`]
+      : [`${state.minX}`, `${state.minY}`, `${remSec}s`],
+    author: { id: 'system', tag: 'auto-resume', username: 'auto-resume' },
+    channelId: state.channelId || discord.getTargetChannelId() || '1553844985776836638',
+    reply: async (msg: string) => {
+      if (discord.isConnected()) {
+        await discord.sendErrorMessage({ content: msg });
+      }
+    },
+    log: (msg: string, level = 'info') => {
+      botManager.addLog(`[HoldResume] ${msg}`, level as any);
+    }
+  };
+
+  void holdCommand.execute(ctx);
 }
 
 export const holdCommand: CommandDefinition = {
@@ -193,6 +314,20 @@ export const holdCommand: CommandDefinition = {
 
     holdRunning = true;
     holdStopRequested = false;
+    holdStoppingForUpdate = false;
+    activeHoldState = {
+      targetDesc,
+      isRange,
+      minX,
+      maxX,
+      minY,
+      maxY,
+      totalDurationMs: durationMs,
+      remainingDurationMs: durationMs,
+      startedAt: Date.now(),
+      channelId: ctx.channelId,
+      resumeAfterUpdate: false
+    };
     MacroManager.setRunningMacro('hold');
 
     const startMsg = `-# ⏱️ holding ${targetDesc} for ${minDesc}... (send "stop" to cancel)`;
@@ -210,9 +345,22 @@ export const holdCommand: CommandDefinition = {
       }
     } finally {
       holdRunning = false;
+      const wasUpdatePause = holdStoppingForUpdate;
+      holdStoppingForUpdate = false;
+      if (!wasUpdatePause) {
+        activeHoldState = null;
+        clearPersistedHoldState();
+      }
       if (MacroManager.getRunningMacro() === 'hold') {
         MacroManager.setRunningMacro(null);
       }
+    }
+
+    if (activeHoldState?.resumeAfterUpdate) {
+      const pauseMsg = `-# ⏸️ hold paused for update — will resume automatically after update`;
+      ctx.log(pauseMsg, 'info');
+      if (ctx.reply) await ctx.reply(pauseMsg);
+      return { success: true, message: pauseMsg, data: result };
     }
 
     const stoppedEarly = holdStopRequested || !result.success || (result.durationMs && result.durationMs < durationMs - 500);
@@ -1708,20 +1856,38 @@ export const farmCommand: CommandDefinition = {
 
 export const apkCommand: CommandDefinition = {
   name: 'apk',
-  description: 'Provides direct download link and setup instructions for Wi-Fi Debug Keeper APK.',
-  usage: 'apk',
+  description: 'Installs or provides direct download link for Wi-Fi Debug Keeper APK.',
+  usage: 'apk [install]',
   aliases: ['wifidebug', 'wifidbg', 'keeper'],
 
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const { botManager } = await import('../botManager');
+    const adb = botManager.getAdbController();
+    const arg = ctx.args[0]?.toLowerCase();
+
+    if (arg === 'install' || arg === 'setup') {
+      const waitMsg = '-# 📦 Installing Wi-Fi Debug Keeper APK and granting permissions...';
+      ctx.log(waitMsg, 'info');
+      if (ctx.reply) await ctx.reply(waitMsg);
+
+      const res = await adb.autoInstallApk();
+      const finishMsg = res.success
+        ? `-# ✅ ${res.message}`
+        : `-# ❌ ${res.message}`;
+      ctx.log(finishMsg, res.success ? 'info' : 'error');
+      if (ctx.reply) await ctx.reply(finishMsg);
+      return res;
+    }
+
     const text = [
       '-# 📲 **Wi-Fi Debug Keeper (.apk)**',
       '-# Automatically enables Wireless Debugging and port 5555 on reboot or Wi-Fi reconnect.',
+      '-# 📦 **Auto-Install via Bot**: send `apk install` in Discord to push & install directly via ADB!',
       '-# 📥 **Direct Download**: http://127.0.0.1:3000/api/download/wifi-debug-keeper.apk',
-      '-# ⚡ **1-Time Permission Grant** (run once in Termux or ADB):',
+      '-# ⚡ **Permission Grant** (done automatically by `apk install` & `run.sh`):',
       '```bash',
       'adb shell pm grant com.autoclick.wifidebug android.permission.WRITE_SECURE_SETTINGS',
-      '```',
-      '-# ✅ Once granted, `run.sh` will auto-trigger the APK and connect on startup!'
+      '```'
     ].join('\n');
 
     ctx.log('Sent APK download link and instructions', 'info');

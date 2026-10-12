@@ -19,9 +19,31 @@ fi
 # Start local ADB server silently
 adb start-server &>/dev/null || true
 
+# Check & auto-install Wi-Fi Debug Keeper APK if connected or once device connects
+APK_FILE="public/downloads/wifi-debug-keeper.apk"
+APK_PKG="com.autoclick.wifidebug"
+
+if [ -f "$APK_FILE" ]; then
+    LOCAL_VER=$(aapt dump badging "$APK_FILE" 2>/dev/null | grep -oE "versionCode='[0-9]+'" | grep -oE "[0-9]+" || echo "1")
+    INSTALLED_VER=$(adb shell "dumpsys package $APK_PKG 2>/dev/null | grep -E 'versionCode=[0-9]+' | head -n 1" | grep -oE "[0-9]+" || echo "0")
+
+    if [ -z "$INSTALLED_VER" ] || [ "$INSTALLED_VER" -eq 0 ] 2>/dev/null; then
+        echo "📦 Auto-installing Wi-Fi Debug Keeper APK (v${LOCAL_VER}) on device..."
+        adb install -r -d -g "$APK_FILE" &>/dev/null || adb push "$APK_FILE" /data/local/tmp/app.apk &>/dev/null && adb shell pm install -r -d -g /data/local/tmp/app.apk &>/dev/null || true
+        adb shell pm grant "$APK_PKG" android.permission.WRITE_SECURE_SETTINGS &>/dev/null || true
+        adb shell rm -f /data/local/tmp/app.apk &>/dev/null || true
+    elif [ "$LOCAL_VER" -gt "$INSTALLED_VER" ] 2>/dev/null; then
+        echo "🔄 Updating Wi-Fi Debug Keeper APK from v${INSTALLED_VER} to newer v${LOCAL_VER}..."
+        adb install -r -d -g "$APK_FILE" &>/dev/null || adb push "$APK_FILE" /data/local/tmp/app.apk &>/dev/null && adb shell pm install -r -d -g /data/local/tmp/app.apk &>/dev/null || true
+        adb shell pm grant "$APK_PKG" android.permission.WRITE_SECURE_SETTINGS &>/dev/null || true
+        adb shell rm -f /data/local/tmp/app.apk &>/dev/null || true
+    else
+        echo "✅ Wi-Fi Debug Keeper APK up-to-date (v${INSTALLED_VER})"
+    fi
+fi
+
 # 1 & 2: Send start order to Wi-Fi Debug Keeper APK
 echo "📲 [1/3] Sending start order to Wi-Fi Debug Keeper APK..."
-APK_PKG="com.autoclick.wifidebug"
 
 # Send start broadcast/order to APK
 START_RESULT=$(adb shell "am broadcast -a com.autoclick.wifidebug.ACTION_TOGGLE_DEBUG -n ${APK_PKG}/.BootReceiver 2>/dev/null || am start-foreground-service -a com.autoclick.wifidebug.ACTION_START_AND_ENABLE -n ${APK_PKG}/.DebugService 2>/dev/null || am start -n ${APK_PKG}/.MainActivity 2>/dev/null" || true)
@@ -32,6 +54,9 @@ if echo "$START_RESULT" | grep -q "result=1"; then
 else
     echo "⚡ [2/3] APK order dispatched ($START_RESULT)"
 fi
+
+# Auto-grant permissions in case it was freshly installed
+adb shell pm grant "$APK_PKG" android.permission.WRITE_SECURE_SETTINGS &>/dev/null || true
 
 # 4: Start searching for port and connecting immediately
 echo "🔍 [3/3] Searching for active wireless debug port..."
