@@ -82,7 +82,6 @@ export default function App() {
   const [manualTapY, setManualTapY] = useState<string>('1000');
   const [manualHoldMs, setManualHoldMs] = useState<string>('1000');
   const [isScanningScreen, setIsScanningScreen] = useState<boolean>(false);
-  const [showApkModal, setShowApkModal] = useState<boolean>(false);
 
   const fetchRules = useCallback(async () => {
     try {
@@ -507,14 +506,6 @@ export default function App() {
               Net Link
             </button>
           )}
-
-          <button
-            onClick={() => setShowApkModal(true)}
-            className="px-1.5 py-0.5 rounded bg-emerald-700/60 hover:bg-emerald-600 text-emerald-100 border border-emerald-500/50 text-[10px] font-medium flex items-center gap-1"
-            title="Download Wi-Fi Debug Keeper APK & View Setup Guide"
-          >
-            <span>📲 APK</span>
-          </button>
 
           <button
             onClick={handleToggleTunnel}
@@ -1093,161 +1084,6 @@ export default function App() {
                 className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px]"
               >
                 Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* Wi-Fi Debug Keeper APK Modal */}
-      {showApkModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-lg w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between bg-slate-950/40">
-              <div className="flex items-center gap-2">
-                <span className="text-base">📲</span>
-                <span className="text-xs font-semibold text-slate-100">
-                  Wi-Fi Debug Keeper (.apk)
-                </span>
-                <span className="px-1.5 py-0.5 rounded text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                  v1.0.0
-                </span>
-              </div>
-              <button
-                onClick={() => setShowApkModal(false)}
-                className="text-slate-400 hover:text-white text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="p-4 overflow-y-auto space-y-4 text-xs text-slate-300">
-              <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-200">1. Download Application</span>
-                  <span className="text-[10px] text-slate-400">12 KB • Android 5.0+</span>
-                </div>
-                <p className="text-[11px] text-slate-400">
-                  Installs directly on Samsung Galaxy A50 / A52s or any Android device. Keeps Wireless Debugging active across reboots and Wi-Fi disconnects.
-                </p>
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <a
-                    href="/api/download/wifi-debug-keeper.apk"
-                    download="wifi-debug-keeper.apk"
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs shadow-md transition"
-                  >
-                    <span>⬇️ Download APK</span>
-                  </a>
-
-                  <button
-                    onClick={async () => {
-                      showToast('Installing APK on connected device...');
-                      try {
-                        const res = await fetch('/api/adb/install-apk', { method: 'POST' }).then((r) => r.json());
-                        showToast(res.message || (res.success ? 'Installed!' : 'Failed'));
-                      } catch (e: any) {
-                        showToast(`Error: ${e.message}`);
-                      }
-                    }}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs shadow-md transition"
-                  >
-                    <span>⚡ 1-Click Install via ADB</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <span className="font-semibold text-slate-200">2. One-Time Setup (ADB Grant)</span>
-                <p className="text-[11px] text-slate-400">
-                  Run this command once in Termux or your PC terminal to grant secure settings permission:
-                </p>
-                <div className="relative group bg-black/60 rounded-lg p-2.5 border border-slate-800 font-mono text-[10px] text-amber-300 break-all">
-                  adb shell pm grant com.autoclick.wifidebug android.permission.WRITE_SECURE_SETTINGS
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText('adb shell pm grant com.autoclick.wifidebug android.permission.WRITE_SECURE_SETTINGS');
-                      showToast('Command copied to clipboard');
-                    }}
-                    className="mt-2 block px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] transition"
-                  >
-                    📋 Copy Command
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-1.5 bg-slate-950/40 border border-slate-800/80 rounded-lg p-3 text-[11px]">
-                <span className="font-semibold text-slate-200">3. How It Operates with run.sh</span>
-                <ul className="space-y-1 text-slate-400 list-disc list-inside">
-                  <li><strong className="text-slate-300">1- .sh launches:</strong> Checks wake-lock, packages, and initializes environment.</li>
-                  <li><strong className="text-slate-300">2- .sh sends start order:</strong> Dispatches toggle order to APK broadcast receiver.</li>
-                  <li><strong className="text-slate-300">3- APK activates debug:</strong> Restores wireless debugging and port 5555 immediately.</li>
-                  <li><strong className="text-slate-300">4- .sh searches port & connects:</strong> Probes 5555, mDNS, and local nmap ports.</li>
-                </ul>
-              </div>
-
-              {/* Virtual App UI Preview & Useless Buttons Panel */}
-              <div className="bg-gradient-to-br from-slate-950 to-emerald-950/30 border border-emerald-500/30 rounded-xl p-3.5 space-y-3">
-                <div className="flex items-center gap-3">
-                  <div className="h-11 w-11 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center text-xl shadow-lg shadow-emerald-500/20 border border-emerald-300/40">
-                    ⚡
-                  </div>
-                  <div>
-                    <div className="font-bold text-slate-100 flex items-center gap-1.5">
-                      <span>Wi-Fi Debug Keeper</span>
-                      <span className="text-[9px] px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 rounded-full border border-emerald-500/30">v1.0</span>
-                    </div>
-                    <div className="text-[10px] text-emerald-400/80">com.autoclick.wifidebug • Background Service Active</div>
-                  </div>
-                </div>
-
-                <div className="text-[11px] text-slate-400 italic">
-                  "Fully loaded with highly sophisticated useless buttons for maximum debugging satisfaction."
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <button
-                    onClick={() => showToast('⚡ Turbo Overdrive: Port 5555 overclocked to infinity! (Still 5555)')}
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-200 font-medium transition flex items-center justify-center gap-1.5 group"
-                  >
-                    <span className="group-hover:scale-110 transition">🚀</span>
-                    <span>Turbo Overdrive</span>
-                  </button>
-
-                  <button
-                    onClick={() => showToast('🛡️ Quantum Shield: Zero bugs detected in the vicinity.')}
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-200 font-medium transition flex items-center justify-center gap-1.5 group"
-                  >
-                    <span className="group-hover:scale-110 transition">🛡️</span>
-                    <span>Quantum Shield</span>
-                  </button>
-
-                  <button
-                    onClick={() => showToast('☕ Coffee Mode: Caffeine level 100%. Code output velocity unchanged.')}
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-200 font-medium transition flex items-center justify-center gap-1.5 group"
-                  >
-                    <span className="group-hover:scale-110 transition">☕</span>
-                    <span>Coffee Mode</span>
-                  </button>
-
-                  <button
-                    onClick={() => showToast('✨ Pixel Polish: 10,000 extra pixels added to imagination.')}
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-200 font-medium transition flex items-center justify-center gap-1.5 group"
-                  >
-                    <span className="group-hover:scale-110 transition">✨</span>
-                    <span>Pixel Polish</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="px-4 py-2.5 border-t border-slate-800 bg-slate-950/50 flex items-center justify-between">
-              <span className="text-[10px] text-slate-400">
-                Discord command: <code className="text-emerald-400">apk</code> or <code className="text-emerald-400">wifidebug</code>
-              </span>
-              <button
-                onClick={() => setShowApkModal(false)}
-                className="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs"
-              >
-                Done
               </button>
             </div>
           </div>

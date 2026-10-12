@@ -141,15 +141,6 @@ async function startServer() {
     }
   });
 
-  app.post('/api/adb/install-apk', async (_req, res) => {
-    try {
-      const result = await botManager.getAdbController().autoInstallApk();
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
-    }
-  });
-
   app.post('/api/adb/tap', async (req, res) => {
     try {
       const { x, y, minX, maxX, minY, maxY } = req.body;
@@ -608,51 +599,6 @@ async function startServer() {
       res.status(500).json({ success: false, message: err.message });
     }
   });
-
-  // Wi-Fi Debug Keeper APK Download Endpoints with timestamped anti-cache support
-  app.get(/^\/(?:api\/download|downloads)\/(?:wifi-debug-.*\.apk|apk)$/, (_req, res) => {
-    try {
-      const downloadsDir = path.resolve(__dirname, 'public', 'downloads');
-      let targetFile = path.resolve(downloadsDir, 'wifi-debug-keeper.apk');
-      
-      if (fs.existsSync(downloadsDir)) {
-        const files = fs.readdirSync(downloadsDir);
-        const apkFiles = files.filter(f => f.startsWith('wifi-debug') && f.endsWith('.apk'));
-        if (apkFiles.length > 0) {
-          // Sort by mtime descending to pick latest
-          apkFiles.sort((a, b) => {
-            const statA = fs.statSync(path.join(downloadsDir, a));
-            const statB = fs.statSync(path.join(downloadsDir, b));
-            return statB.mtimeMs - statA.mtimeMs;
-          });
-          
-          targetFile = path.join(downloadsDir, apkFiles[0]);
-
-          // Clean up older timestamped APKs to keep git repo size tiny
-          for (let i = 1; i < apkFiles.length; i++) {
-            try {
-              fs.unlinkSync(path.join(downloadsDir, apkFiles[i]));
-            } catch {}
-          }
-        }
-      }
-
-      if (fs.existsSync(targetFile)) {
-        const timestamp = Date.now();
-        res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-        res.setHeader('Content-Disposition', `attachment; filename="wifi-debug-${timestamp}.apk"`);
-        res.sendFile(targetFile);
-      } else {
-        res.status(404).json({ success: false, message: 'APK file not found in public/downloads.' });
-      }
-    } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
-    }
-  });
-
-  // Serve static public assets
-  app.use(express.static(path.resolve(__dirname, 'public')));
 
   // Vite development / Production static file handler
   if (process.env.NODE_ENV !== 'production') {

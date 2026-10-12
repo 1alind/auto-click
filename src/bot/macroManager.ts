@@ -296,20 +296,11 @@ export class MacroManager {
    */
   public static async resumeStartIfNeeded(): Promise<void> {
     const state = this.loadStartState();
-    if (!state.resumeAfterUpdate) {
-      console.log('[MacroManager] No update resume needed.');
-      return;
-    }
+    if (!state.resumeAfterUpdate) return;
 
-    console.log('[MacroManager] Update detected — forcing clear and resume...');
     this.saveStartState({ resumeAfterUpdate: false });
-    
     const startMacro = this.getMacro(state.macroName || 'start');
-    if (!startMacro) {
-      console.error('[MacroManager] Could not find start macro to resume.');
-      return;
-    }
-
+    if (!startMacro) return;
 
     const { botManager } = await import('./botManager');
     const discord = botManager.getDiscordBot();

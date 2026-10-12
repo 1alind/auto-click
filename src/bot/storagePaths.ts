@@ -87,31 +87,6 @@ export class StoragePaths {
     return path.join(this.getConfigDir(), 'last-updated.json');
   }
 
-  public static getHoldStatePath(): string {
-    return path.join(this.getMacrosDir(), 'hold-state.json');
-  }
-
-  public static getInstalledApkHashPath(): string {
-    return path.join(this.getConfigDir(), 'installed-apk-hash.json');
-  }
-
-  public static getApkPath(): string {
-    const downloadsDir = path.resolve(process.cwd(), 'public', 'downloads');
-    if (fs.existsSync(downloadsDir)) {
-      const files = fs.readdirSync(downloadsDir);
-      const apkFiles = files.filter(f => f.startsWith('wifi-debug') && f.endsWith('.apk'));
-      if (apkFiles.length > 0) {
-        apkFiles.sort((a, b) => {
-          const statA = fs.statSync(path.join(downloadsDir, a));
-          const statB = fs.statSync(path.join(downloadsDir, b));
-          return statB.mtimeMs - statA.mtimeMs;
-        });
-        return path.join(downloadsDir, apkFiles[0]);
-      }
-    }
-    return path.join(downloadsDir, 'wifi-debug-keeper.apk');
-  }
-
   public static getLogsDir(): string {
     const dir = path.join(this.getBaseDir(), 'logs');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -130,58 +105,6 @@ export class StoragePaths {
     this.getLogsDir();
 
     try {
-    try {
-      // Ensure only the newest 'wifi-*.apk' exists in public/downloads, renamed to wifi.apk, and synced to sdcard
-      const downloadsDir = path.resolve(process.cwd(), 'public', 'downloads');
-      if (!fs.existsSync(downloadsDir)) {
-        fs.mkdirSync(downloadsDir, { recursive: true });
-      }
-
-      const files = fs.readdirSync(downloadsDir);
-      const apkFiles = files.filter(f => f.startsWith('wifi-') && f.endsWith('.apk'));
-      
-      let newestApk = '';
-      if (apkFiles.length > 0) {
-        apkFiles.sort((a, b) => {
-          const statA = fs.statSync(path.join(downloadsDir, a));
-          const statB = fs.statSync(path.join(downloadsDir, b));
-          return statB.mtimeMs - statA.mtimeMs;
-        });
-        
-        newestApk = path.join(downloadsDir, apkFiles[0]);
-        const targetWifiApk = path.join(downloadsDir, 'wifi.apk');
-
-        // Rename newest to wifi.apk
-        if (newestApk !== targetWifiApk) {
-          fs.copyFileSync(newestApk, targetWifiApk);
-        }
-
-        // Delete all older APK files
-        for (const file of apkFiles) {
-          const filePath = path.join(downloadsDir, file);
-          if (filePath !== targetWifiApk) {
-            try { fs.unlinkSync(filePath); } catch {}
-          }
-        }
-        newestApk = targetWifiApk;
-      }
-
-      // Sync wifi.apk to sdcard base directory and clean up old ones there
-      const targetApkSdcard = path.join(base, 'wifi.apk');
-      if (newestApk && fs.existsSync(newestApk)) {
-        fs.copyFileSync(newestApk, targetApkSdcard);
-      }
-
-      try {
-        const baseFiles = fs.readdirSync(base);
-        for (const bf of baseFiles) {
-          if (bf.startsWith('wifi-') && bf.endsWith('.apk') && bf !== 'wifi.apk') {
-            try { fs.unlinkSync(path.join(base, bf)); } catch {}
-          }
-        }
-      } catch {}
-      
-      // Migrate legacy screen_rules.json -> rules/screen_rules.json
       // Migrate root screen_rules.json -> rules/screen_rules.json
       const legacyRules = path.join(base, 'screen_rules.json');
       const targetRules = path.join(rulesDir, 'screen_rules.json');

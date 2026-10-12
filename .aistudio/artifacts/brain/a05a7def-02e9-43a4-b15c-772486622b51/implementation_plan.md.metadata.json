@@ -1,6 +1,0 @@
-{
-  "summary": "Implementation plan for the WiFi Debug Keeper Android APK and Dashboard integration. Covers the automated background service listening for device reboots and Wi-Fi reconnects, one-time permission setup for non-rooted Samsung Galaxy devices, in-app direct APK download portal, and Discord bot integration.",
-  "updatedAt": "2026-10-12T12:13:46.003609727Z",
-  "requestFeedback": true,
-  "userFacing": true
-}

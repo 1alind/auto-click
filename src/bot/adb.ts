@@ -220,169 +220,6 @@ export class AdbController {
     );
   }
 
-  /**
-   * Auto-installs or updates the Wi-Fi Debug Keeper APK on the connected device
-   * and automatically grants the WRITE_SECURE_SETTINGS permission.
-   */
-  public async autoInstallApk(apkLocalPath?: string): Promise<{ success: boolean; message: string }> {
-    try {
-      const isAdb = await this.isAdbAvailable();
-      if (!isAdb) {
-        return { success: false, message: 'ADB is not available' };
-      }
-
-      const pathMod = await import('path');
-      const fsMod = await import('fs');
-      const { StoragePaths } = await import('./storagePaths');
-      const pkgName = 'com.autoclick.wifidebug';
-      
-      const sdcardApk = StoragePaths.getApkPath();
-      const downloadsDir = pathMod.resolve(process.cwd(), 'public', 'downloads');
-      
-      let targetApk = apkLocalPath;
-      if (!targetApk) {
-        if (fsMod.existsSync(sdcardApk)) {
-          targetApk = sdcardApk;
-        } else if (fsMod.existsSync(downloadsDir)) {
-          const files = fsMod.readdirSync(downloadsDir);
-          const apkFiles = files.filter(f => f.startsWith('wifi-debug') && f.endsWith('.apk'));
-          if (apkFiles.length > 0) {
-            apkFiles.sort((a, b) => {
-              const statA = fsMod.statSync(pathMod.join(downloadsDir, a));
-              const statB = fsMod.statSync(pathMod.join(downloadsDir, b));
-              return statB.mtimeMs - statA.mtimeMs;
-            });
-            targetApk = pathMod.join(downloadsDir, apkFiles[0]);
-          }
-        }
-      }
-
-      if (!targetApk || !fsMod.existsSync(targetApk)) {
-        // Fallback to static name
-        targetApk = pathMod.resolve(process.cwd(), 'public', 'downloads', 'wifi-debug-keeper.apk');
-      }
-
-      let adbTarget = await this.resolveTargetFlag().catch(() => '');
-      if (!adbTarget) {
-        return { success: false, message: 'No connected Android device found' };
-      }
-
-      // 1. Get local APK versionCode & SHA256 checksum
-      let localVersionCode = 1;
-      let localSha256 = '';
-      try {
-        const cryptoMod = await import('crypto');
-        const fileBuf = fsMod.readFileSync(targetApk);
-        localSha256 = cryptoMod.createHash('sha256').update(fileBuf).digest('hex');
-      } catch {}
-
-      try {
-        const { stdout: aaptOut } = await execPromise(`aapt dump badging "${targetApk}" 2>/dev/null`).catch(() => ({ stdout: '' }));
-        const m = aaptOut.match(/versionCode='(\d+)'/);
-        if (m) localVersionCode = parseInt(m[1], 10);
-      } catch {}
-
-      // 2. Get installed package versionCode on Android device
-      let installedVersionCode = 0;
-      const { stdout: dumpOut } = await execPromise(
-        `adb ${adbTarget} shell "dumpsys package ${pkgName} 2>/dev/null | grep -E 'versionCode=[0-9]+' | head -n 1"`
-      ).catch(() => ({ stdout: '' }));
-      const vm = dumpOut.match(/versionCode=(\d+)/);
-      if (vm) installedVersionCode = parseInt(vm[1], 10);
-
-      // 3. Load recorded hash of last installed APK
-      const hashFilePath = StoragePaths.getInstalledApkHashPath();
-      let lastInstalledHash = '';
-      try {
-        if (fsMod.existsSync(hashFilePath)) {
-          const rawHash = JSON.parse(fsMod.readFileSync(hashFilePath, 'utf-8'));
-          lastInstalledHash = rawHash?.hash || '';
-        }
-      } catch {}
-
-      const alreadyInstalled = installedVersionCode > 0;
-      const hashChanged = Boolean(localSha256 && lastInstalledHash && localSha256 !== lastInstalledHash);
-      const versionNewer = localVersionCode > installedVersionCode;
-      const needsUpdate = !alreadyInstalled || versionNewer || hashChanged;
-
-      if (!needsUpdate) {
-        // Ensure permissions and service are active even if already on latest version
-        await execPromise(`adb ${adbTarget} shell pm grant ${pkgName} android.permission.WRITE_SECURE_SETTINGS`).catch(() => {});
-        await execPromise(
-          `adb ${adbTarget} shell "am broadcast -a com.autoclick.wifidebug.ACTION_TOGGLE_DEBUG -n ${pkgName}/.BootReceiver 2>/dev/null || am start-foreground-service -a com.autoclick.wifidebug.ACTION_START_AND_ENABLE -n ${pkgName}/.DebugService 2>/dev/null || am start -n ${pkgName}/.MainActivity 2>/dev/null"`
-        ).catch(() => {});
-
-        return {
-          success: true,
-          message: `Wi-Fi Debug Keeper is already up-to-date (v${installedVersionCode}) on device (${adbTarget})`
-        };
-      }
-
-      // Temporarily disable package verifier to prevent "App not installed" false blocks from Play Protect
-      await execPromise(`adb ${adbTarget} shell settings put global package_verifier_enable 0`).catch(() => {});
-
-      // Install or update with robust flags (-r -d -g --bypass-low-target-sdk-block)
-      let { stdout: instOut, stderr: instErr } = await execPromise(`adb ${adbTarget} install -r -d -g --bypass-low-target-sdk-block "${targetApk}"`).catch((e) => ({
-        stdout: e.stdout || '',
-        stderr: e.stderr || e.message || ''
-      }));
-
-      let outCombined = `${instOut} ${instErr}`.toLowerCase();
-      let installOk = outCombined.includes('success') || outCombined.includes('installed');
-
-      // If signature mismatch / app not installed error occurs, uninstall old conflicting package and retry clean
-      if (!installOk || outCombined.includes('incompatible') || outCombined.includes('failed_update_incompatible') || outCombined.includes('already_exists')) {
-        await execPromise(`adb ${adbTarget} uninstall ${pkgName}`).catch(() => {});
-        const retryRes = await execPromise(`adb ${adbTarget} install -r -d -g --bypass-low-target-sdk-block "${targetApk}"`).catch((e) => ({
-          stdout: e.stdout || '',
-          stderr: e.stderr || e.message || ''
-        }));
-        instOut = retryRes.stdout;
-        instErr = retryRes.stderr;
-        outCombined = `${instOut} ${instErr}`.toLowerCase();
-        installOk = outCombined.includes('success') || outCombined.includes('installed');
-      }
-
-      if (!installOk) {
-        // Fallback: push to /data/local/tmp and run pm install -r --bypass-low-target-sdk-block
-        await execPromise(`adb ${adbTarget} push "${targetApk}" /data/local/tmp/wifi-debug.apk`).catch(() => {});
-        await execPromise(`adb ${adbTarget} shell pm uninstall ${pkgName}`).catch(() => {});
-        await execPromise(`adb ${adbTarget} shell pm install -r -d -g --bypass-low-target-sdk-block /data/local/tmp/wifi-debug.apk`).catch(() => {});
-        await execPromise(`adb ${adbTarget} shell rm -f /data/local/tmp/wifi-debug.apk`).catch(() => {});
-      }
-
-      // Re-enable package verifier
-      await execPromise(`adb ${adbTarget} shell settings put global package_verifier_enable 1`).catch(() => {});
-
-      // Grant WRITE_SECURE_SETTINGS permission automatically
-      await execPromise(`adb ${adbTarget} shell pm grant ${pkgName} android.permission.WRITE_SECURE_SETTINGS`).catch(() => {});
-
-      // Launch start order
-      await execPromise(
-        `adb ${adbTarget} shell "am broadcast -a com.autoclick.wifidebug.ACTION_TOGGLE_DEBUG -n ${pkgName}/.BootReceiver 2>/dev/null || am start-foreground-service -a com.autoclick.wifidebug.ACTION_START_AND_ENABLE -n ${pkgName}/.DebugService 2>/dev/null || am start -n ${pkgName}/.MainActivity 2>/dev/null"`
-      ).catch(() => {});
-
-      // Save the installed hash so identical builds aren't reinstalled unnecessarily
-      if (localSha256) {
-        try {
-          fsMod.writeFileSync(
-            hashFilePath,
-            JSON.stringify({ hash: localSha256, versionCode: localVersionCode, updatedAt: new Date().toISOString() }, null, 2),
-            'utf-8'
-          );
-        } catch {}
-      }
-
-      const actionWord = alreadyInstalled ? `updated to v${localVersionCode}` : `installed v${localVersionCode}`;
-      return {
-        success: true,
-        message: `Wi-Fi Debug Keeper ${actionWord} & permissions granted on device (${adbTarget})`
-      };
-    } catch (err: any) {
-      return { success: false, message: `APK installation failed: ${err.message}` };
-    }
-  }
-
   private adbAvailableCache: boolean | null = null;
 
   /**
@@ -785,9 +622,9 @@ export class AdbController {
 
   /**
    * Performs a long press / hold at coordinates (x, y) for durationMs.
-   * Runs as a single continuous touch without lifting fingers or stuttering.
-   * Actively polls checkCancelled and immediately aborts the active input command
-   * and releases touches if stop is requested.
+   * Runs as a continuous hold without breaking or lifting fingers every few seconds.
+   * Actively polls checkCancelled and immediately aborts child process and releases touches
+   * on the Android device if stop is requested.
    */
   public async hold(
     x: number,
@@ -805,50 +642,45 @@ export class AdbController {
     const startTime = Date.now();
     let elapsedMs = 0;
 
-    if (this.holdStopRequested || (checkCancelled && checkCancelled())) {
-      this.isHolding = false;
-      return {
-        x: rx,
-        y: ry,
-        command: 'hold aborted',
-        success: false,
-        output: 'hold cancelled before start',
-        durationMs: 0
-      };
-    }
-
-    // Cancellation polling: checks every 200ms
-    let cancelInterval: NodeJS.Timeout | null = null;
-    let cancelled = false;
-
-    if (checkCancelled) {
-      cancelInterval = setInterval(() => {
-        if (!cancelled && (this.holdStopRequested || checkCancelled())) {
-          cancelled = true;
-          if (cancelInterval) {
-            clearInterval(cancelInterval);
-            cancelInterval = null;
-          }
-          void this.stopAllTaps();
-        }
-      }, 200);
-    }
-
     try {
-      // Execute as a single continuous swipe on the same coordinate.
-      // Note: rx + 1 pixel delta guarantees Android motion dispatchers don't collapse it to a tap.
-      const rxTarget = rx <= 1 ? rx + 1 : rx;
-      await this.swipe(rx, ry, rxTarget, ry, totalMs);
-      elapsedMs = Math.min(totalMs, Date.now() - startTime);
-    } catch (err: any) {
-      elapsedMs = Date.now() - startTime;
-    } finally {
-      if (cancelInterval) {
-        clearInterval(cancelInterval);
-        cancelInterval = null;
+      if (this.holdStopRequested || (checkCancelled && checkCancelled())) {
+        return {
+          x: rx,
+          y: ry,
+          command: 'hold aborted',
+          success: false,
+          output: 'hold cancelled before start',
+          durationMs: 0
+        };
       }
+
+      // Check cancellation every 200ms while hold is running;
+      // If cancellation is signaled from outside, trigger stopAllTaps immediately
+      let cancelInterval: NodeJS.Timeout | null = null;
+      if (checkCancelled) {
+        cancelInterval = setInterval(() => {
+          if (this.holdStopRequested || (checkCancelled && checkCancelled())) {
+            if (cancelInterval) {
+              clearInterval(cancelInterval);
+              cancelInterval = null;
+            }
+            void this.stopAllTaps();
+          }
+        }, 200);
+      }
+
+      try {
+        await this.swipe(rx, ry, rx, ry, totalMs);
+        elapsedMs = Math.min(totalMs, Date.now() - startTime);
+      } finally {
+        if (cancelInterval) {
+          clearInterval(cancelInterval);
+          cancelInterval = null;
+        }
+      }
+    } finally {
       this.isHolding = false;
-      // Guarantee touch release after hold completes or stops
+      // Guarantee touch release after hold ends or is interrupted
       await this.releaseTouch(rx, ry).catch(() => {});
     }
 
@@ -857,7 +689,7 @@ export class AdbController {
       x: rx,
       y: ry,
       command: `swipe ${rx} ${ry} ${rx} ${ry} ${totalMs}`,
-      success: !this.holdStopRequested && !cancelled,
+      success: !this.holdStopRequested,
       output: `hold (${rx}, ${ry}) for ${elapsedMs}ms`,
       durationMs: elapsedMs
     };

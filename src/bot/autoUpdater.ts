@@ -357,14 +357,6 @@ export class AutoUpdater {
         this.log('⏳ Update waiting for "find" to finish completely...', 'info');
         await MacroManager.waitForFind();
       }
-
-      // Check if hold is actively running: pause hold and record remaining duration
-      const { isHoldRunning, pauseHoldForUpdate } = await import('./commands/index');
-      if (isHoldRunning()) {
-        this.log('⏳ Update detected active hold — pausing hold and saving remaining duration...', 'info');
-        await pauseHoldForUpdate();
-      }
-
       if (MacroManager.getRunningMacro()) {
         this.log('⏳ Update waiting for running macro to pause at safe step boundary (1, 7, or 13) and save state to SD card...', 'info');
         await MacroManager.stopForUpdateAndWait();

@@ -33,8 +33,7 @@ import {
   buttonsCommand,
   cleanupCommand,
   farmCommand,
-  disableTapsCommand,
-  apkCommand
+  disableTapsCommand
 } from './commands/index';
 import { RefImageManager } from './refImage';
 import { CrashHandler } from './crashHandler';
@@ -137,7 +136,6 @@ export class BotManager {
     this.discord.registerCommand(cleanupCommand);
     this.discord.registerCommand(farmCommand);
     this.discord.registerCommand(disableTapsCommand);
-    this.discord.registerCommand(apkCommand);
 
     // Load and register all saved custom macros as direct commands (e.g. "start")
     import('./macroManager').then(({ MacroManager }) => {
