@@ -625,7 +625,15 @@ async function startServer() {
             const statB = fs.statSync(path.join(downloadsDir, b));
             return statB.mtimeMs - statA.mtimeMs;
           });
+          
           targetFile = path.join(downloadsDir, apkFiles[0]);
+
+          // Clean up older timestamped APKs to keep git repo size tiny
+          for (let i = 1; i < apkFiles.length; i++) {
+            try {
+              fs.unlinkSync(path.join(downloadsDir, apkFiles[i]));
+            } catch {}
+          }
         }
       }
 
