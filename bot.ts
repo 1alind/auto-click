@@ -2,14 +2,27 @@ import { botManager } from './src/bot/botManager';
 import { RefImageManager } from './src/bot/refImage';
 import { ConsoleLogger } from './src/bot/consoleLogger';
 
-process.on('SIGINT', () => {
+const handleShutdown = async () => {
+  try {
+    const { MacroManager } = await import('./src/bot/macroManager');
+    const { stopHold, stopFarm } = await import('./src/bot/commands/index');
+    const { stopSub } = await import('./src/bot/commands/sub');
+    MacroManager.stopAll();
+    stopHold();
+    stopFarm();
+    stopSub();
+    await botManager.getAdbController().stopAllTaps().catch(() => {});
+  } catch {}
   ConsoleLogger.stopped();
   process.exit(0);
+};
+
+process.on('SIGINT', () => {
+  void handleShutdown();
 });
 
 process.on('SIGTERM', () => {
-  ConsoleLogger.stopped();
-  process.exit(0);
+  void handleShutdown();
 });
 
 async function main() {

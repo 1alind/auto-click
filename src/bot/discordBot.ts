@@ -802,7 +802,12 @@ export class DiscordBotClient {
 
       try {
         const { MacroManager } = await import('./macroManager');
-        if (MacroManager.isFindRunning()) {
+        const isEmergencyStop =
+          commandKey.toLowerCase() === 'stop' ||
+          commandKey.toLowerCase().startsWith('disable') ||
+          commandKey.toLowerCase().startsWith('stop');
+
+        if (!isEmergencyStop && MacroManager.isFindRunning()) {
           this.log(`⏳ Command "${commandKey}" queued — waiting for "find" to finish...`, 'info');
           await MacroManager.waitForFind();
         }
@@ -905,7 +910,12 @@ export class DiscordBotClient {
 
       try {
         const { MacroManager } = await import('./macroManager');
-        if (MacroManager.isFindRunning()) {
+        const isEmergencyStop =
+          commandName.toLowerCase() === 'stop' ||
+          commandName.toLowerCase().startsWith('disable') ||
+          commandName.toLowerCase().startsWith('stop');
+
+        if (!isEmergencyStop && MacroManager.isFindRunning()) {
           this.log(`⏳ Button "${commandName}" queued — waiting for "find" to finish...`, 'info');
           await MacroManager.waitForFind();
         }

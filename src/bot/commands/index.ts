@@ -927,6 +927,9 @@ export const stopCommand: CommandDefinition = {
     if (stoppedSub) stoppedItems.push(`sub ${subOpt}`);
     if (stoppedAutoConnect) stoppedItems.push('adb auto-connect');
 
+    const stoppedFind = MacroManager.stopFind();
+    if (stoppedFind) stoppedItems.push('find');
+
     let msg: string;
     if (stoppedItems.length > 0) {
       const unique = Array.from(new Set(stoppedItems));
@@ -935,6 +938,34 @@ export const stopCommand: CommandDefinition = {
       msg = `-# 🛑 disabled all taps & released touch (nothing was running)`;
     }
 
+    ctx.log(msg, 'info');
+    if (ctx.reply) await ctx.reply(msg);
+    return { success: true, message: msg };
+  }
+};
+
+export const disableTapsCommand: CommandDefinition = {
+  name: 'disable-taps',
+  description: 'Immediately disables all active taps, stops any running hold/swipe on device, and clears stuck touch state.',
+  usage: 'disable-taps',
+  aliases: ['disabletaps', 'stoptaps', 'releasetouch', 'untap', 'fixtouch', 'cleartaps'],
+
+  execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const { botManager } = await import('../botManager');
+    const { stopHold, stopFarm } = await import('./index');
+    const { stopSub } = await import('./sub');
+    const { MacroManager } = await import('../macroManager');
+
+    stopHold();
+    stopFarm();
+    stopSub();
+    MacroManager.stopAll();
+    MacroManager.stopFind();
+
+    const adb = botManager.getAdbController();
+    await adb.stopAllTaps();
+
+    const msg = '-# 🛑 all taps disabled on device & screen touches released';
     ctx.log(msg, 'info');
     if (ctx.reply) await ctx.reply(msg);
     return { success: true, message: msg };
@@ -1417,8 +1448,9 @@ export function stopFarm(): boolean {
 
 export const farmCommand: CommandDefinition = {
   name: 'farm',
-  description: 'Farming loop: tap resource tile, search rssatk, search as1, wait.',
-  usage: 'farm [turns]',
+  description: 'Farming loop: tap resource tile, search rssatk/asbtn, search as1, wait.',
+  usage: 'farm [turns] [xrange yrange] (e.g. farm, form, farm 20, farm 20 465-602 1109-1223)',
+  aliases: ['form', 'farming'],
 
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
     const { botManager } = await import('../botManager');
@@ -1474,27 +1506,51 @@ export const farmCommand: CommandDefinition = {
       return null;
     };
 
-    const rssatkPath = resolveFarmingImage('rssatk');
+    // Supports rssatk.png or asbtn.png as the attack/gather trigger
+    const rssatkPath = resolveFarmingImage('rssatk') || resolveFarmingImage('asbtn');
     const as1Path = resolveFarmingImage('as1');
 
     if (!rssatkPath || !as1Path) {
       const missingList: string[] = [];
-      if (!rssatkPath) missingList.push('rssatk.png');
+      if (!rssatkPath) missingList.push('rssatk.png (or asbtn.png)');
       if (!as1Path) missingList.push('as1.png');
-      const err = `Farming images not found: ${missingList.join(', ')}. Please save them to /sdcard/autoclick/images/ (or data/autoclick/images/).`;
+      const err = `Image file not found: ${missingList.join(', ')} — please save to /sdcard/autoclick/images/ on your device`;
       ctx.log(err, 'error');
       if (ctx.reply) await ctx.reply(`-# ❌ ${err}`);
       return { success: false, message: err };
     }
 
-    const maxIterations = ctx.args.length > 0 ? parseInt(ctx.args[0], 10) : Infinity;
+    let maxIterations = Infinity;
+    let tileMinX = 465, tileMaxX = 602, tileMinY = 1109, tileMaxY = 1223;
+
+    if (ctx.args && ctx.args.length > 0) {
+      const firstArg = ctx.args[0].trim();
+      if (/^\d+$/.test(firstArg)) {
+        maxIterations = parseInt(firstArg, 10);
+        if (ctx.args.length >= 3 && ctx.args[1].includes('-') && ctx.args[2].includes('-')) {
+          const [x1, x2] = ctx.args[1].split('-').map(Number);
+          const [y1, y2] = ctx.args[2].split('-').map(Number);
+          if (!isNaN(x1) && !isNaN(x2)) { tileMinX = Math.min(x1, x2); tileMaxX = Math.max(x1, x2); }
+          if (!isNaN(y1) && !isNaN(y2)) { tileMinY = Math.min(y1, y2); tileMaxY = Math.max(y1, y2); }
+        }
+      } else if (firstArg.includes('-') && ctx.args.length >= 2 && ctx.args[1].includes('-')) {
+        const [x1, x2] = firstArg.split('-').map(Number);
+        const [y1, y2] = ctx.args[1].split('-').map(Number);
+        if (!isNaN(x1) && !isNaN(x2)) { tileMinX = Math.min(x1, x2); tileMaxX = Math.max(x1, x2); }
+        if (!isNaN(y1) && !isNaN(y2)) { tileMinY = Math.min(y1, y2); tileMaxY = Math.max(y1, y2); }
+        if (ctx.args.length >= 3 && /^\d+$/.test(ctx.args[2].trim())) {
+          maxIterations = parseInt(ctx.args[2].trim(), 10);
+        }
+      }
+    }
 
     farmRunning = true;
     farmStopRequested = false;
     MacroManager.setRunningMacro('farm');
 
-    ctx.log(`🚜 Starting farming loop... (limit: ${maxIterations === Infinity ? 'unlimited' : maxIterations} turns, send "stop" to halt)`, 'info');
-    if (ctx.reply) await ctx.reply(`-# 🚜 Farming started (limit: ${maxIterations === Infinity ? 'unlimited' : maxIterations} turns)`);
+    const limitDesc = maxIterations === Infinity ? 'unlimited' : `${maxIterations} turns`;
+    ctx.log(`🚜 Starting farming loop... (limit: ${limitDesc}, tile: X=[${tileMinX}..${tileMaxX}] Y=[${tileMinY}..${tileMaxY}], send "stop" to halt)`, 'info');
+    if (ctx.reply) await ctx.reply(`-# 🚜 Farming started (limit: ${limitDesc})`);
 
     const interruptibleWait = async (totalMs: number): Promise<boolean> => {
       const start = Date.now();
@@ -1507,7 +1563,8 @@ export const farmCommand: CommandDefinition = {
       return !farmStopRequested && MacroManager.getRunningMacro() === 'farm';
     };
 
-    const thresh = Math.min(config.matchThreshold || 0.75, 0.80);
+    const thresh = Math.min(config.matchThreshold || 0.72, 0.75);
+    const multiScales = [0.85, 0.92, 1.0, 1.08, 1.15];
 
     try {
       let iterations = 0;
@@ -1519,11 +1576,11 @@ export const farmCommand: CommandDefinition = {
         iterations++;
         ctx.log(`🚜 Farming iteration ${iterations}/${maxIterations === Infinity ? '∞' : maxIterations}`, 'info');
 
-        // 1. Tap resource tile: 530-549, 1190-1209
-        await adb.tapRandomRange(530, 549, 1190, 1209);
+        // 1. Tap resource tile
+        await adb.tapRandomRange(tileMinX, tileMaxX, tileMinY, tileMaxY);
         if (!(await interruptibleWait(850))) break;
 
-        // 2. Search rssatk.png (retry up to 3 times to accommodate popup open animation)
+        // 2. Search attack / gather button (rssatk or asbtn)
         let foundRssatk = false;
         for (let attempt = 0; attempt < 3; attempt++) {
           if (farmStopRequested || MacroManager.getRunningMacro() !== 'farm') break;
@@ -1534,23 +1591,23 @@ export const farmCommand: CommandDefinition = {
             continue;
           }
 
-          // Search primary region first (680-850, 1180-1350)
+          // Search primary region first (650-900, 1050-1350)
           let matchRssatk = await TemplateMatcher.matchRaw(rawScreen1, rssatkPath, {
-            scales: [1.0, 0.95, 1.05],
+            scales: multiScales,
             threshold: thresh,
-            region: { minX: 680, maxX: 850, minY: 1180, maxY: 1350 }
+            region: { minX: 650, maxX: 900, minY: 1050, maxY: 1350 }
           }).catch(() => null);
 
           // Fallback to full screen if not detected in region
           if (!matchRssatk || !matchRssatk.found) {
             matchRssatk = await TemplateMatcher.matchRaw(rawScreen1, rssatkPath, {
-              scales: [1.0, 0.95, 1.05],
+              scales: multiScales,
               threshold: thresh
             }).catch(() => null);
           }
 
           if (matchRssatk && matchRssatk.found) {
-            ctx.log(`🚜 Found rssatk, clicking (${matchRssatk.targetPoint.x}, ${matchRssatk.targetPoint.y})`, 'info');
+            ctx.log(`🚜 Found attack/gather button, clicking (${matchRssatk.targetPoint.x}, ${matchRssatk.targetPoint.y})`, 'info');
             await adb.tap(matchRssatk.targetPoint.x, matchRssatk.targetPoint.y);
             foundRssatk = true;
             break;
@@ -1560,15 +1617,15 @@ export const farmCommand: CommandDefinition = {
         }
 
         if (!foundRssatk) {
-          ctx.log('🚜 rssatk not detected on screen, retrying next loop', 'warn');
+          ctx.log('🚜 Attack/gather button not detected on screen, retrying next loop', 'warn');
           if (!(await interruptibleWait(2000))) break;
           continue;
         }
 
-        // Wait for attack / march window to open
+        // Wait for troop march window to open
         if (!(await interruptibleWait(800))) break;
 
-        // 3. Search as1.png (retry up to 3 times to accommodate troop selection menu)
+        // 3. Search as1 march button
         let foundAs1 = false;
         for (let attempt = 0; attempt < 3; attempt++) {
           if (farmStopRequested || MacroManager.getRunningMacro() !== 'farm') break;
@@ -1579,17 +1636,17 @@ export const farmCommand: CommandDefinition = {
             continue;
           }
 
-          // Search primary region (200-340, 1560-1730)
+          // Search primary region (180-360, 1550-1780)
           let matchAs1 = await TemplateMatcher.matchRaw(rawScreen2, as1Path, {
-            scales: [1.0, 0.95, 1.05],
+            scales: multiScales,
             threshold: thresh,
-            region: { minX: 200, maxX: 340, minY: 1560, maxY: 1730 }
+            region: { minX: 180, maxX: 360, minY: 1550, maxY: 1780 }
           }).catch(() => null);
 
           // Fallback to full screen if not found in region
           if (!matchAs1 || !matchAs1.found) {
             matchAs1 = await TemplateMatcher.matchRaw(rawScreen2, as1Path, {
-              scales: [1.0, 0.95, 1.05],
+              scales: multiScales,
               threshold: thresh
             }).catch(() => null);
           }
@@ -1623,3 +1680,28 @@ export const farmCommand: CommandDefinition = {
     return { success: true, message: 'Farming stopped' };
   }
 };
+
+export const apkCommand: CommandDefinition = {
+  name: 'apk',
+  description: 'Provides direct download link and setup instructions for Wi-Fi Debug Keeper APK.',
+  usage: 'apk',
+  aliases: ['wifidebug', 'wifidbg', 'keeper'],
+
+  execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const text = [
+      '-# 📲 **Wi-Fi Debug Keeper (.apk)**',
+      '-# Automatically enables Wireless Debugging and port 5555 on reboot or Wi-Fi reconnect.',
+      '-# 📥 **Direct Download**: http://127.0.0.1:3000/api/download/wifi-debug-keeper.apk',
+      '-# ⚡ **1-Time Permission Grant** (run once in Termux or ADB):',
+      '```bash',
+      'adb shell pm grant com.autoclick.wifidebug android.permission.WRITE_SECURE_SETTINGS',
+      '```',
+      '-# ✅ Once granted, `run.sh` will auto-trigger the APK and connect on startup!'
+    ].join('\n');
+
+    ctx.log('Sent APK download link and instructions', 'info');
+    if (ctx.reply) await ctx.reply(text);
+    return { success: true, message: 'APK download information sent' };
+  }
+};
+

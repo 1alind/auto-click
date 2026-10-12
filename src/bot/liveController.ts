@@ -561,13 +561,30 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
       }
     });
 
+    viewport.addEventListener('pointercancel', (e) => {
+      try {
+        if (viewport.hasPointerCapture && viewport.hasPointerCapture(e.pointerId)) {
+          viewport.releasePointerCapture(e.pointerId);
+        }
+      } catch (err) {}
+      dragStart = null;
+      dragCur = null;
+      pointerDownTime = 0;
+    });
+
     viewport.addEventListener('pointerup', async (e) => {
+      try {
+        if (viewport.hasPointerCapture && viewport.hasPointerCapture(e.pointerId)) {
+          viewport.releasePointerCapture(e.pointerId);
+        }
+      } catch (err) {}
       if (!dragStart) return;
-      const endPt = toPhone(e.clientX, e.clientY) || dragCur || dragStart;
       const sPt = dragStart;
+      const endPt = dragCur || toPhone(e.clientX, e.clientY) || dragStart;
       const pressDur = pointerDownTime ? Date.now() - pointerDownTime : 0;
       dragStart = null; dragCur = null; pointerDownTime = 0;
       const dx = Math.abs(endPt.x - sPt.x), dy = Math.abs(endPt.y - sPt.y);
+      const dist = Math.hypot(dx, dy);
 
       if (mode === 'box') {
         if (dx < 8 && dy < 8) { toast('Point: ' + endPt.x + ' ' + endPt.y); return; }
@@ -585,13 +602,14 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
         return;
       }
 
-      if (Math.hypot(dx, dy) > 35) {
+      if (dist > 25) {
+        const swipeDur = Math.max(120, Math.min(600, pressDur || 250));
         toast('Swipe (' + sPt.x + ',' + sPt.y + ')→(' + endPt.x + ',' + endPt.y + ')');
         await fetch('/api/live/swipe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ x1: sPt.x, y1: sPt.y, x2: endPt.x, y2: endPt.y, durationMs: 300 })
-        });
+          body: JSON.stringify({ x1: sPt.x, y1: sPt.y, x2: endPt.x, y2: endPt.y, durationMs: swipeDur })
+        }).catch((err) => { toast('Swipe error: ' + err.message); });
         if (quality !== 'h264') setTimeout(() => fetchFrame(true), 250);
       } else if (pressDur >= 400) {
         tapMarker.style.display = 'block';
@@ -603,7 +621,7 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ x: endPt.x, y: endPt.y, durationMs: pressDur })
-        });
+        }).catch((err) => { toast('Hold error: ' + err.message); });
         if (quality !== 'h264') setTimeout(() => fetchFrame(true), 250);
       } else {
         tapMarker.style.display = 'block';
@@ -615,7 +633,7 @@ const STANDALONE_LIVE_HTML = `<!DOCTYPE html>
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ x: endPt.x, y: endPt.y })
-        });
+        }).catch((err) => { toast('Tap error: ' + err.message); });
         if (quality !== 'h264') setTimeout(() => fetchFrame(true), 250);
       }
     });

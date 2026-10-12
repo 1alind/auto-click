@@ -600,6 +600,22 @@ async function startServer() {
     }
   });
 
+  // Wi-Fi Debug Keeper APK Download Endpoints
+  const apkFilePath = path.resolve(__dirname, 'public', 'downloads', 'wifi-debug-keeper.apk');
+
+  app.get(['/api/download/wifi-debug-keeper.apk', '/api/download/apk', '/downloads/wifi-debug-keeper.apk'], (_req, res) => {
+    if (fs.existsSync(apkFilePath)) {
+      res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+      res.setHeader('Content-Disposition', 'attachment; filename="wifi-debug-keeper.apk"');
+      res.sendFile(apkFilePath);
+    } else {
+      res.status(404).json({ success: false, message: 'APK file not found. Please build or check public/downloads.' });
+    }
+  });
+
+  // Serve static public assets
+  app.use(express.static(path.resolve(__dirname, 'public')));
+
   // Vite development / Production static file handler
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
@@ -614,6 +630,24 @@ async function startServer() {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   }
+
+  const handleShutdown = async () => {
+    try {
+      const { MacroManager } = await import('./src/bot/macroManager');
+      const { stopHold, stopFarm } = await import('./src/bot/commands/index');
+      const { stopSub } = await import('./src/bot/commands/sub');
+      MacroManager.stopAll();
+      stopHold();
+      stopFarm();
+      stopSub();
+      await botManager.getAdbController().stopAllTaps().catch(() => {});
+    } catch {}
+    ConsoleLogger.stopped();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', () => void handleShutdown());
+  process.on('SIGTERM', () => void handleShutdown());
 
   app.listen(Number(PORT), '0.0.0.0', () => {
     if (!process.env.BOT_RESTARTED) {

@@ -242,6 +242,14 @@ export class MacroManager {
     return this.findRunning;
   }
 
+  public static stopFind(): boolean {
+    if (!this.findRunning) return false;
+    this.findRunning = false;
+    const waiters = this.cycleFindWaiters();
+    for (const resolve of waiters) resolve();
+    return true;
+  }
+
   public static async waitForFind(): Promise<void> {
     while (this.findRunning) {
       await new Promise<void>((resolve) => this.findWaiters.push(resolve));
