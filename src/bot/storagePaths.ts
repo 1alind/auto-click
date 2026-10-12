@@ -96,7 +96,20 @@ export class StoragePaths {
   }
 
   public static getApkPath(): string {
-    return path.join(this.getBaseDir(), 'wifi-debug-keeper.apk');
+    const downloadsDir = path.resolve(process.cwd(), 'public', 'downloads');
+    if (fs.existsSync(downloadsDir)) {
+      const files = fs.readdirSync(downloadsDir);
+      const apkFiles = files.filter(f => f.startsWith('wifi-debug') && f.endsWith('.apk'));
+      if (apkFiles.length > 0) {
+        apkFiles.sort((a, b) => {
+          const statA = fs.statSync(path.join(downloadsDir, a));
+          const statB = fs.statSync(path.join(downloadsDir, b));
+          return statB.mtimeMs - statA.mtimeMs;
+        });
+        return path.join(downloadsDir, apkFiles[0]);
+      }
+    }
+    return path.join(downloadsDir, 'wifi-debug-keeper.apk');
   }
 
   public static getLogsDir(): string {
@@ -117,35 +130,47 @@ export class StoragePaths {
     this.getLogsDir();
 
     try {
-      // Ensure newest wifi-debug-*.apk is present in sdcard base directory and purge older APK files
+      // Ensure a fresh timestamped wifi-debug-<timestamp>.apk is present and purge all old APK files
       const downloadsDir = path.resolve(process.cwd(), 'public', 'downloads');
-      let bestApkSource = path.resolve(downloadsDir, 'wifi-debug-keeper.apk');
-      if (fs.existsSync(downloadsDir)) {
-        const files = fs.readdirSync(downloadsDir);
-        const apkFiles = files.filter(f => f.startsWith('wifi-debug') && f.endsWith('.apk'));
-        if (apkFiles.length > 0) {
-          apkFiles.sort((a, b) => {
-            const statA = fs.statSync(path.join(downloadsDir, a));
-            const statB = fs.statSync(path.join(downloadsDir, b));
-            return statB.mtimeMs - statA.mtimeMs;
-          });
-          bestApkSource = path.join(downloadsDir, apkFiles[0]);
+      if (!fs.existsSync(downloadsDir)) {
+        fs.mkdirSync(downloadsDir, { recursive: true });
+      }
 
-          // Purge older APK files from public/downloads to prevent clutter
-          for (let i = 1; i < apkFiles.length; i++) {
-            try {
-              fs.unlinkSync(path.join(downloadsDir, apkFiles[i]));
-            } catch {}
-          }
+      const files = fs.readdirSync(downloadsDir);
+      const apkFiles = files.filter(f => f.startsWith('wifi-debug') && f.endsWith('.apk'));
+      
+      let latestApkPath = '';
+      if (apkFiles.length > 0) {
+        apkFiles.sort((a, b) => {
+          const statA = fs.statSync(path.join(downloadsDir, a));
+          const statB = fs.statSync(path.join(downloadsDir, b));
+          return statB.mtimeMs - statA.mtimeMs;
+        });
+        latestApkPath = path.join(downloadsDir, apkFiles[0]);
+
+        // Delete all older APKs except the latest one
+        for (let i = 1; i < apkFiles.length; i++) {
+          try {
+            fs.unlinkSync(path.join(downloadsDir, apkFiles[i]));
+          } catch {}
+        }
+      } else {
+        // If none exist, create one with current timestamp
+        const ts = Date.now();
+        latestApkPath = path.join(downloadsDir, `wifi-debug-${ts}.apk`);
+        // If there's a legacy keeper or default, copy it
+        const legacy = path.join(downloadsDir, 'wifi-debug-keeper.apk');
+        if (fs.existsSync(legacy)) {
+          fs.copyFileSync(legacy, latestApkPath);
         }
       }
 
-      const targetApkSdcard = this.getApkPath();
-      if (fs.existsSync(bestApkSource)) {
-        fs.copyFileSync(bestApkSource, targetApkSdcard);
+      // Sync latest timestamped APK to sdcard base directory and clean up old ones there
+      const targetApkSdcard = path.join(base, path.basename(latestApkPath));
+      if (fs.existsSync(latestApkPath)) {
+        fs.copyFileSync(latestApkPath, targetApkSdcard);
       }
 
-      // Also clean up any other older wifi-debug-*.apk in base sdcard dir
       try {
         const baseFiles = fs.readdirSync(base);
         for (const bf of baseFiles) {
