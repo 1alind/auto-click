@@ -1063,32 +1063,27 @@ export const liveCommand: CommandDefinition = {
       return { success: true, message: msg, data: status };
     }
 
-    if (sub !== 'local' && sub !== 'net' && sub !== 'all') {
-      const usageMsg = '-# usage: live local | live net | live all | live stop';
-      if (ctx.reply) await ctx.reply(usageMsg);
-      return { success: false, message: usageMsg };
-    }
-
-    const mode: 'local' | 'net' | 'all' = sub;
+    // If no argument or 'local', default to local. Allow 'net', 'all', 'stop'
+    const mode: 'local' | 'net' | 'all' = sub === 'net' ? 'net' : sub === 'all' ? 'all' : 'local';
     const status = await LiveController.startLiveTunnel(LIVE_PORT, (m) => ctx.log(m, 'info'), mode);
 
-    const ipPort = status.localUrl ? status.localUrl.replace(/^https?:\/\//, '') : '';
+    const localLink = status.localUrl || `http://127.0.0.1:${LIVE_PORT}`;
     const lines: string[] = [];
 
     if (mode === 'local') {
       lines.push('-# live local started');
-      if (ipPort) lines.push(`-# ${ipPort}`);
+      if (localLink) lines.push(`-# [${localLink}](${localLink})`);
     } else if (mode === 'net') {
       lines.push('-# live net started');
       if (status.publicUrl) {
-        lines.push(`-# ${status.publicUrl}`);
+        lines.push(`-# [${status.publicUrl}](${status.publicUrl})`);
       } else if (status.error) {
         lines.push(`-# error: ${status.error}`);
       }
     } else {
       lines.push('-# live all started');
-      if (ipPort) lines.push(`-# ${ipPort}`);
-      if (status.publicUrl) lines.push(`-# ${status.publicUrl}`);
+      if (localLink) lines.push(`-# [${localLink}](${localLink})`);
+      if (status.publicUrl) lines.push(`-# [${status.publicUrl}](${status.publicUrl})`);
     }
 
     const msg = lines.join('\n');
